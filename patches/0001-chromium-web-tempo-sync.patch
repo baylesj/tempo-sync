@@ -1,0 +1,3558 @@
+From a6272549e5397df96ff5dc122a1682f7e96fa242 Mon Sep 17 00:00:00 2001
+From: Jordan Bayles <jophba@chromium.org>
+Date: Fri, 23 Oct 2026 20:31:31 +0000
+Subject: [PATCH] [WIP] Prototype Web Tempo Sync API (navigator.tempoSync)
+
+Prototypes the Web Tempo Sync API behind --enable-blink-features=TempoSync
+and --tempo-sync-engine=rust, bridging Blink to the sans-IO tempo_sync_core
+Rust engine over Mojo and cxx.
+
+Bug: 576996348
+---
+ content/browser/BUILD.gn                      |  19 +
+ content/browser/browser_interface_binders.cc  |   4 +
+ content/browser/tempo_sync/README.md          |  38 ++
+ .../tempo_sync/fake_tempo_sync_engine.cc      |  57 ++
+ .../tempo_sync/fake_tempo_sync_engine.h       |  33 ++
+ .../tempo_sync/rust_tempo_sync_bridge.rs      | 215 +++++++
+ .../tempo_sync/rust_tempo_sync_engine.cc      | 413 +++++++++++++
+ .../tempo_sync/rust_tempo_sync_engine.h       |  48 ++
+ .../browser/tempo_sync/tempo_session_host.cc  |  70 +++
+ .../browser/tempo_sync/tempo_session_host.h   |  45 ++
+ .../browser/tempo_sync/tempo_sync_engine.h    |  31 +
+ .../tempo_sync/tempo_sync_service_impl.cc     |  41 ++
+ .../tempo_sync/tempo_sync_service_impl.h      |  29 +
+ third_party/blink/public/mojom/BUILD.gn       |   1 +
+ .../public/mojom/tempo_sync/tempo_sync.mojom  |  37 ++
+ .../bindings/generated_in_modules.gni         |   8 +
+ .../renderer/bindings/idl_in_modules.gni      |   5 +
+ .../core/events/event_target_names.json5      |   1 +
+ .../core/events/event_type_names.json5        |   3 +
+ third_party/blink/renderer/modules/BUILD.gn   |   1 +
+ .../renderer/modules/tempo_sync/BUILD.gn      |  17 +
+ .../blink/renderer/modules/tempo_sync/DEPS    |   3 +
+ .../tempo_sync/navigator_tempo_sync.cc        |  39 ++
+ .../modules/tempo_sync/navigator_tempo_sync.h |  34 ++
+ .../tempo_sync/navigator_tempo_sync.idl       |   1 +
+ .../modules/tempo_sync/tempo_session.cc       | 144 +++++
+ .../modules/tempo_sync/tempo_session.h        |  70 +++
+ .../modules/tempo_sync/tempo_session.idl      |   7 +
+ .../tempo_sync/tempo_session_options.idl      |   1 +
+ .../modules/tempo_sync/tempo_session_state.cc | 140 +++++
+ .../modules/tempo_sync/tempo_session_state.h  |  62 ++
+ .../tempo_sync/tempo_session_state.idl        |   6 +
+ .../renderer/modules/tempo_sync/tempo_sync.cc |  89 +++
+ .../renderer/modules/tempo_sync/tempo_sync.h  |  51 ++
+ .../modules/tempo_sync/tempo_sync.idl         |   1 +
+ .../modules/webaudio/audio_context.cc         |   6 +
+ .../renderer/modules/webaudio/audio_context.h |   1 +
+ .../platform/runtime_enabled_features.json5   |   4 +
+ .../tempo_sync/tempo-session-manual.html      |  58 ++
+ .../tempo-session-peers-manual.html           |  32 +
+ .../tempo_sync/tempo-session.html             |  22 +
+ third_party/tempo_sync_core/BUILD.gn          |  19 +
+ third_party/tempo_sync_core/Cargo.toml        |   6 +
+ third_party/tempo_sync_core/README.chromium   |  10 +
+ third_party/tempo_sync_core/src/discovery.rs  |   2 +
+ third_party/tempo_sync_core/src/engine.rs     | 555 ++++++++++++++++++
+ third_party/tempo_sync_core/src/lib.rs        |  15 +
+ .../tempo_sync_core/src/measurement.rs        |   3 +
+ third_party/tempo_sync_core/src/session.rs    |   3 +
+ third_party/tempo_sync_core/src/time.rs       |  49 ++
+ third_party/tempo_sync_core/src/timeline.rs   | 175 ++++++
+ third_party/tempo_sync_core/src/wire.rs       | 307 ++++++++++
+ 52 files changed, 3031 insertions(+)
+ create mode 100644 content/browser/tempo_sync/README.md
+ create mode 100644 content/browser/tempo_sync/fake_tempo_sync_engine.cc
+ create mode 100644 content/browser/tempo_sync/fake_tempo_sync_engine.h
+ create mode 100644 content/browser/tempo_sync/rust_tempo_sync_bridge.rs
+ create mode 100644 content/browser/tempo_sync/rust_tempo_sync_engine.cc
+ create mode 100644 content/browser/tempo_sync/rust_tempo_sync_engine.h
+ create mode 100644 content/browser/tempo_sync/tempo_session_host.cc
+ create mode 100644 content/browser/tempo_sync/tempo_session_host.h
+ create mode 100644 content/browser/tempo_sync/tempo_sync_engine.h
+ create mode 100644 content/browser/tempo_sync/tempo_sync_service_impl.cc
+ create mode 100644 content/browser/tempo_sync/tempo_sync_service_impl.h
+ create mode 100644 third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/BUILD.gn
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/DEPS
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.cc
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.h
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.idl
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/tempo_session.cc
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/tempo_session.h
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/tempo_session.idl
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/tempo_session_options.idl
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/tempo_session_state.cc
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/tempo_session_state.idl
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/tempo_sync.cc
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/tempo_sync.h
+ create mode 100644 third_party/blink/renderer/modules/tempo_sync/tempo_sync.idl
+ create mode 100644 third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-manual.html
+ create mode 100644 third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-peers-manual.html
+ create mode 100644 third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session.html
+ create mode 100644 third_party/tempo_sync_core/BUILD.gn
+ create mode 100644 third_party/tempo_sync_core/Cargo.toml
+ create mode 100644 third_party/tempo_sync_core/README.chromium
+ create mode 100644 third_party/tempo_sync_core/src/discovery.rs
+ create mode 100644 third_party/tempo_sync_core/src/engine.rs
+ create mode 100644 third_party/tempo_sync_core/src/lib.rs
+ create mode 100644 third_party/tempo_sync_core/src/measurement.rs
+ create mode 100644 third_party/tempo_sync_core/src/session.rs
+ create mode 100644 third_party/tempo_sync_core/src/time.rs
+ create mode 100644 third_party/tempo_sync_core/src/timeline.rs
+ create mode 100644 third_party/tempo_sync_core/src/wire.rs
+
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+index cda5d70ca84a6..5f7f7f8ad130e 100644
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -132,6 +132,7 @@ source_set("browser") {
+   ldflags = []
+ 
+   deps = [
++    ":rust_tempo_sync_bridge",
+     ":child_process_security_policy_impl",
+     "//base",
+     "//base:base_static",
+@@ -329,6 +330,7 @@ source_set("browser") {
+     "//third_party/blink/public/common",
+     "//third_party/blink/public/common:font_enumeration_table_proto",
+     "//third_party/blink/public/common:preloading_headers",
++    "//third_party/blink/public/mojom:mojom_platform",
+     "//third_party/blink/public/mojom/webnn",
+     "//third_party/blink/public/strings",
+     "//third_party/boringssl",
+@@ -1305,6 +1307,15 @@ source_set("browser") {
+     "media/session/media_session_uma_helper.h",
+     "media/system_media_controls/system_media_controls_notifier.cc",
+     "media/system_media_controls/system_media_controls_notifier.h",
++    "tempo_sync/fake_tempo_sync_engine.cc",
++    "tempo_sync/rust_tempo_sync_engine.cc",
++    "tempo_sync/rust_tempo_sync_engine.h",
++    "tempo_sync/fake_tempo_sync_engine.h",
++    "tempo_sync/tempo_session_host.cc",
++    "tempo_sync/tempo_session_host.h",
++    "tempo_sync/tempo_sync_engine.h",
++    "tempo_sync/tempo_sync_service_impl.cc",
++    "tempo_sync/tempo_sync_service_impl.h",
+     "media/webaudio/audio_context_manager_impl.cc",
+     "media/webaudio/audio_context_manager_impl.h",
+     "media_session/media_session_service.cc",
+@@ -3732,3 +3743,11 @@ fuzzer_test("content_sms_parser_fuzzer") {
+     "//content/public/renderer:renderer_sources",
+   ]
+ }
++
++rust_static_library("rust_tempo_sync_bridge") {
++  allow_unsafe = true
++  crate_root = "tempo_sync/rust_tempo_sync_bridge.rs"
++  sources = [ "tempo_sync/rust_tempo_sync_bridge.rs" ]
++  cxx_bindings = [ "tempo_sync/rust_tempo_sync_bridge.rs" ]
++  deps = [ "//third_party/tempo_sync_core" ]
++}
+diff --git a/content/browser/browser_interface_binders.cc b/content/browser/browser_interface_binders.cc
+index ec3892a0c0c8f..6398e38c4ca68 100644
+--- a/content/browser/browser_interface_binders.cc
++++ b/content/browser/browser_interface_binders.cc
+@@ -25,6 +25,7 @@
+ #include "content/browser/background_fetch/background_fetch_service_impl.h"
+ #include "content/browser/bad_message.h"
+ #include "content/browser/bluetooth/web_bluetooth_service_impl.h"
++#include "content/browser/tempo_sync/tempo_sync_service_impl.h"
+ #include "content/browser/browser_context_impl.h"
+ #include "content/browser/browser_main_loop.h"
+ #include "content/browser/connection_allowlist_utils.h"
+@@ -1221,6 +1222,9 @@ void PopulateBinderMapWithContext(
+         &BindWebNNWeightsFileCreatorForRenderFrame);
+   }
+ 
++  map->Add<blink::mojom::TempoSyncService>(
++      &TempoSyncServiceImpl::Create);
++
+   map->Add<blink::mojom::WebBluetoothService>(
+       &WebBluetoothServiceImpl::BindIfAllowed);
+ 
+diff --git a/content/browser/tempo_sync/README.md b/content/browser/tempo_sync/README.md
+new file mode 100644
+index 0000000000000..18db41c9f7e0f
+--- /dev/null
++++ b/content/browser/tempo_sync/README.md
+@@ -0,0 +1,38 @@
++# Web Tempo Sync Prototype
++
++This directory contains the browser-side implementation of the Web Tempo Sync prototype, enabling synchronization of web audio timing with external peers using Ableton Link.
++
++## Architecture
++
++*   **TempoSessionHost**: The browser-process host for the `blink::mojom::TempoSession` mojo interface. It lives on the UI thread and coordinates between the renderer process and the synchronization engine.
++*   **TempoSyncEngine**: An abstract interface representing the synchronization core. The host communicates with this interface, and implementations must report changes via `TempoSyncEngine::Observer`.
++*   **FakeTempoSyncEngine**: A dummy implementation of the engine that acts as a standalone session. It responds immediately with no external networking.
++*   **RustTempoSyncEngine**: The real synchronization engine, powered by the `tempo_sync_core` Rust crate (Ableton Link compatible).
++    *   **Threading**: The `RustTempoSyncEngine` lives on the UI thread, but spawns a dedicated `base::Thread` (`TempoSyncEngineThread`) for the Rust core and UDP socket I/O.
++    *   **Sockets**: The engine uses `net::UDPSocket` instances. A single multicast socket listens for peer discovery and session updates, while multiple ephemeral unicast sockets (one per IPv4 network interface) are used for measurement ping/pong traffic.
++    *   **Time Domains**: The Rust core uses its own `HostTime` (microseconds since an arbitrary epoch). The C++ bridge converts this from/to `base::TimeTicks` for use across Mojo and the Blink renderer.
++
++## Command Line Switches
++
++To run Chromium with the prototype enabled, use the following switches:
++
++*   `--enable-blink-features=TempoSync`: Enables the `navigator.tempoSync` WebIDL APIs in Blink.
++*   `--tempo-sync-engine=rust` or `--tempo-sync-engine=fake`: Selects the engine implementation used by `TempoSessionHost`. (Defaults to `rust`).
++*   `--vmodule=rust_tempo_sync_engine=1`: Enables `VLOG(1)` tracing in the Rust engine, which logs interface joins, UDP datagram payloads, timer deadlines, and session state changes.
++
++## Refreshing the Vendored Crate
++
++The core logic is implemented in Rust and vendored in `third_party/tempo_sync_core`. To update it from upstream:
++
++1.  Copy the new crate contents into `third_party/tempo_sync_core/src/`.
++2.  Ensure `BUILD.gn` and `README.chromium` are preserved in `third_party/tempo_sync_core/`.
++3.  Update the `cxx::bridge` definitions in `content/browser/tempo_sync/rust_tempo_sync_bridge.rs` if the upstream `Engine` API changes.
++
++## Known Prototype Shortcuts
++
++This implementation is a prototype and intentionally cuts some corners for simplicity:
++
++*   **Multicast Routing**: A single multicast socket is bound to `0.0.0.0`, and joined on each interface.
++*   **No Permission Prompt**: The API is exposed without requiring explicit user permission or a permissions-policy check.
++*   **Browser-Process Sockets**: The UDP sockets are opened directly in the browser process using `net::UDPSocket`. In a production implementation, this should be routed through the Network Service.
++*   **IPv4 Only**: Only IPv4 multicast (`224.76.78.75`) and IPv4 network interfaces are currently supported.
+diff --git a/content/browser/tempo_sync/fake_tempo_sync_engine.cc b/content/browser/tempo_sync/fake_tempo_sync_engine.cc
+new file mode 100644
+index 0000000000000..892bac9d13cff
+--- /dev/null
++++ b/content/browser/tempo_sync/fake_tempo_sync_engine.cc
+@@ -0,0 +1,57 @@
++#include "content/browser/tempo_sync/fake_tempo_sync_engine.h"
++
++namespace content {
++
++FakeTempoSyncEngine::FakeTempoSyncEngine() {
++  timeline_ = blink::mojom::Timeline::New();
++  timeline_->tempo_bpm = 120.0;
++  timeline_->beat_origin = 0.0;
++  timeline_->time_origin = base::TimeTicks::Now();
++
++  start_stop_ = blink::mojom::StartStopState::New();
++  start_stop_->is_playing = true;
++  start_stop_->beat = 0.0;
++  start_stop_->time = base::TimeTicks::Now();
++}
++
++FakeTempoSyncEngine::~FakeTempoSyncEngine() = default;
++
++void FakeTempoSyncEngine::AddObserver(Observer* observer) {
++  observers_.AddObserver(observer);
++  observer->OnTimelineChanged(timeline_->Clone());
++  observer->OnStartStopChanged(start_stop_->Clone());
++  observer->OnNumPeersChanged(num_peers_);
++}
++
++void FakeTempoSyncEngine::RemoveObserver(Observer* observer) {
++  observers_.RemoveObserver(observer);
++}
++
++void FakeTempoSyncEngine::SetTimeline(blink::mojom::TimelinePtr timeline) {
++  timeline_ = std::move(timeline);
++  for (auto& observer : observers_) {
++    observer.OnTimelineChanged(timeline_->Clone());
++  }
++}
++
++void FakeTempoSyncEngine::SetStartStop(blink::mojom::StartStopStatePtr state) {
++  start_stop_ = std::move(state);
++  for (auto& observer : observers_) {
++    observer.OnStartStopChanged(start_stop_->Clone());
++  }
++}
++
++
++blink::mojom::TimelinePtr FakeTempoSyncEngine::GetTimeline() const {
++  return timeline_->Clone();
++}
++
++blink::mojom::StartStopStatePtr FakeTempoSyncEngine::GetStartStop() const {
++  return start_stop_->Clone();
++}
++
++uint32_t FakeTempoSyncEngine::GetNumPeers() const {
++  return num_peers_;
++}
++
++}  // namespace content
+diff --git a/content/browser/tempo_sync/fake_tempo_sync_engine.h b/content/browser/tempo_sync/fake_tempo_sync_engine.h
+new file mode 100644
+index 0000000000000..c565353c3fb44
+--- /dev/null
++++ b/content/browser/tempo_sync/fake_tempo_sync_engine.h
+@@ -0,0 +1,33 @@
++#ifndef CONTENT_BROWSER_TEMPO_SYNC_FAKE_TEMPO_SYNC_ENGINE_H_
++#define CONTENT_BROWSER_TEMPO_SYNC_FAKE_TEMPO_SYNC_ENGINE_H_
++
++#include "base/observer_list.h"
++#include "content/browser/tempo_sync/tempo_sync_engine.h"
++
++namespace content {
++
++class FakeTempoSyncEngine : public TempoSyncEngine {
++ public:
++  FakeTempoSyncEngine();
++  ~FakeTempoSyncEngine() override;
++
++  // TempoSyncEngine
++  void AddObserver(Observer* observer) override;
++  void RemoveObserver(Observer* observer) override;
++
++  void SetTimeline(blink::mojom::TimelinePtr timeline) override;
++  void SetStartStop(blink::mojom::StartStopStatePtr state) override;
++  blink::mojom::TimelinePtr GetTimeline() const override;
++  blink::mojom::StartStopStatePtr GetStartStop() const override;
++  uint32_t GetNumPeers() const override;
++
++ private:
++  base::ObserverList<Observer>::Unchecked observers_;
++  blink::mojom::TimelinePtr timeline_;
++  blink::mojom::StartStopStatePtr start_stop_;
++  uint32_t num_peers_ = 0;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_BROWSER_TEMPO_SYNC_FAKE_TEMPO_SYNC_ENGINE_H_
+\ No newline at end of file
+diff --git a/content/browser/tempo_sync/rust_tempo_sync_bridge.rs b/content/browser/tempo_sync/rust_tempo_sync_bridge.rs
+new file mode 100644
+index 0000000000000..438790e1c887d
+--- /dev/null
++++ b/content/browser/tempo_sync/rust_tempo_sync_bridge.rs
+@@ -0,0 +1,215 @@
++#![allow(warnings)]
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++use cxx::CxxVector;
++use std::net::Ipv4Addr;
++use tempo_sync_core::{Engine, Output, InterfaceId, SocketAddrPlain, NodeId};
++use tempo_sync_core::time::{HostTime, Tempo, MicroBeats, TempoWire};
++use tempo_sync_core::timeline::{Timeline, StartStopState, SessionState};
++
++#[cxx::bridge(namespace = "content::tempo_sync_bridge")]
++pub mod ffi {
++    struct TimelineData {
++        tempo: f64,
++        beat_origin: f64,
++        time_origin_micros: i64,
++    }
++
++    struct StartStopData {
++        is_playing: bool,
++        beat: f64,
++        time_micros: i64,
++    }
++
++    struct OutputEvent {
++        tag: u8,
++        
++        timeline: TimelineData,
++        start_stop: StartStopData,
++        
++        num_peers: u32,
++        
++        iface_id: u32,
++        ip: [u8; 4],
++        port: u16,
++        bytes: Vec<u8>,
++        
++        time_micros: i64,
++    }
++
++    extern "Rust" {
++        type RustEngine;
++        
++        fn create_engine(node_id_val: u64) -> Box<RustEngine>;
++        
++        fn handle_packet(self: &mut RustEngine, iface_id: u32, from_ip: [u8; 4], from_port: u16, bytes: &[u8], now_micros: i64) -> Vec<OutputEvent>;
++        fn handle_timer(self: &mut RustEngine, now_micros: i64) -> Vec<OutputEvent>;
++        fn commit_app_state(self: &mut RustEngine, timeline: TimelineData, start_stop: StartStopData, now_micros: i64) -> Vec<OutputEvent>;
++        fn set_enabled(self: &mut RustEngine, enabled: bool, now_micros: i64) -> Vec<OutputEvent>;
++        fn add_interface(self: &mut RustEngine, iface_id: u32, ip: [u8; 4], port: u16) -> Vec<OutputEvent>;
++        fn remove_interface(self: &mut RustEngine, iface_id: u32) -> Vec<OutputEvent>;
++        fn handle_io_error(self: &mut RustEngine, iface_id: u32, error_kind: u8, now_micros: i64) -> Vec<OutputEvent>;
++        
++        fn get_timeline(self: &RustEngine) -> TimelineData;
++        fn get_start_stop(self: &RustEngine) -> StartStopData;
++    }
++}
++
++pub struct RustEngine {
++    engine: Engine,
++}
++
++fn create_engine(node_id_val: u64) -> Box<RustEngine> {
++    let mut node_id = NodeId([0; 8]);
++    node_id.0.copy_from_slice(&node_id_val.to_be_bytes());
++    Box::new(RustEngine {
++        engine: Engine::new(node_id),
++    })
++}
++
++fn to_timeline_data(tl: &Timeline) -> ffi::TimelineData {
++    ffi::TimelineData {
++        tempo: tl.tempo.to_tempo().0,
++        beat_origin: tl.beat_origin.to_beats(),
++        time_origin_micros: tl.time_origin.0,
++    }
++}
++
++fn to_start_stop_data(ss: &StartStopState) -> ffi::StartStopData {
++    ffi::StartStopData {
++        is_playing: ss.is_playing,
++        beat: ss.beat.to_beats(),
++        time_micros: ss.time.0,
++    }
++}
++
++fn default_timeline_data() -> ffi::TimelineData {
++    ffi::TimelineData { tempo: 120.0, beat_origin: 0.0, time_origin_micros: 0 }
++}
++fn default_start_stop_data() -> ffi::StartStopData {
++    ffi::StartStopData { is_playing: false, beat: 0.0, time_micros: 0 }
++}
++
++fn convert_outputs(outputs: Vec<Output>) -> Vec<ffi::OutputEvent> {
++    outputs.into_iter().map(|out| {
++        let mut evt = ffi::OutputEvent {
++            tag: 0,
++            timeline: default_timeline_data(),
++            start_stop: default_start_stop_data(),
++            num_peers: 0,
++            iface_id: 0,
++            ip: [0, 0, 0, 0],
++            port: 0,
++            bytes: Vec::new(),
++            time_micros: 0,
++        };
++        match out {
++            Output::StateChanged { state } => {
++                evt.tag = 1;
++                evt.timeline = to_timeline_data(&state.timeline);
++                evt.start_stop = to_start_stop_data(&state.start_stop);
++            }
++            Output::NumPeersChanged(n) => {
++                evt.tag = 2;
++                evt.num_peers = n;
++            }
++            Output::Send { iface_id, to, bytes } => {
++                evt.tag = 3;
++                evt.iface_id = iface_id.0;
++                evt.ip = to.ip;
++                evt.port = to.port;
++                evt.bytes = bytes;
++            }
++            Output::JoinMulticast { iface_id, group, port } => {
++                evt.tag = 4;
++                evt.iface_id = iface_id.0;
++                evt.ip = group;
++                evt.port = port;
++            }
++            Output::LeaveMulticast => {
++                evt.tag = 5;
++            }
++            Output::OpenUnicast { iface_id } => {
++                evt.tag = 6;
++                evt.iface_id = iface_id.0;
++            }
++            Output::SetTimer { at } => {
++                evt.tag = 7;
++                evt.time_micros = at.0;
++            }
++        }
++        evt
++    }).collect()
++}
++
++impl RustEngine {
++    fn handle_packet(&mut self, iface_id: u32, from_ip: [u8; 4], from_port: u16, bytes: &[u8], now_micros: i64) -> Vec<ffi::OutputEvent> {
++        let outputs = self.engine.handle_packet(
++            InterfaceId(iface_id),
++            SocketAddrPlain { ip: from_ip, port: from_port },
++            bytes,
++            HostTime(now_micros),
++        );
++        convert_outputs(outputs)
++    }
++
++    fn handle_timer(&mut self, now_micros: i64) -> Vec<ffi::OutputEvent> {
++        let outputs = self.engine.handle_timer(HostTime(now_micros));
++        convert_outputs(outputs)
++    }
++
++    fn commit_app_state(&mut self, timeline: ffi::TimelineData, start_stop: ffi::StartStopData, now_micros: i64) -> Vec<ffi::OutputEvent> {
++        let state = SessionState {
++            timeline: Timeline {
++                tempo: TempoWire::from_tempo(Tempo(timeline.tempo)),
++                beat_origin: MicroBeats::from_beats(timeline.beat_origin),
++                time_origin: HostTime(timeline.time_origin_micros),
++            },
++            start_stop: StartStopState {
++                is_playing: start_stop.is_playing,
++                beat: MicroBeats::from_beats(start_stop.beat),
++                time: HostTime(start_stop.time_micros),
++            }
++        };
++        let outputs = self.engine.commit_app_state(state, HostTime(now_micros));
++        convert_outputs(outputs)
++    }
++
++    fn set_enabled(&mut self, enabled: bool, now_micros: i64) -> Vec<ffi::OutputEvent> {
++        let outputs = self.engine.set_enabled(enabled, HostTime(now_micros));
++        convert_outputs(outputs)
++    }
++
++    fn add_interface(&mut self, iface_id: u32, ip: [u8; 4], port: u16) -> Vec<ffi::OutputEvent> {
++        let outputs = self.engine.add_interface(
++            InterfaceId(iface_id),
++            SocketAddrPlain { ip, port }
++        );
++        convert_outputs(outputs)
++    }
++
++    fn handle_io_error(&mut self, iface_id: u32, error_kind: u8, now_micros: i64) -> Vec<ffi::OutputEvent> {
++        let kind = match error_kind {
++            0 => tempo_sync_core::IoErrorKind::JoinMulticastFailed,
++            1 => tempo_sync_core::IoErrorKind::OpenUnicastFailed,
++            _ => tempo_sync_core::IoErrorKind::SendFailed,
++        };
++        let outputs = self.engine.handle_io_error(InterfaceId(iface_id), kind, HostTime(now_micros));
++        convert_outputs(outputs)
++    }
++
++    fn remove_interface(&mut self, iface_id: u32) -> Vec<ffi::OutputEvent> {
++        let outputs = self.engine.remove_interface(InterfaceId(iface_id));
++        convert_outputs(outputs)
++    }
++
++    fn get_timeline(&self) -> ffi::TimelineData {
++        to_timeline_data(&self.engine.state.timeline)
++    }
++
++    fn get_start_stop(&self) -> ffi::StartStopData {
++        to_start_stop_data(&self.engine.state.start_stop)
++    }
++}
+diff --git a/content/browser/tempo_sync/rust_tempo_sync_engine.cc b/content/browser/tempo_sync/rust_tempo_sync_engine.cc
+new file mode 100644
+index 0000000000000..e5013bb546bd5
+--- /dev/null
++++ b/content/browser/tempo_sync/rust_tempo_sync_engine.cc
+@@ -0,0 +1,413 @@
++
++#pragma allow_unsafe_buffers
++#include "content/browser/tempo_sync/rust_tempo_sync_engine.h"
++
++#include <optional>
++#include <map>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "base/task/single_thread_task_runner.h"
++#include "base/time/time.h"
++#include "base/timer/timer.h"
++#include "base/rand_util.h"
++#include "base/logging.h"
++#include "net/base/network_interfaces.h"
++#include "net/base/ip_address.h"
++#include "net/base/ip_endpoint.h"
++#include "net/base/io_buffer.h"
++#include "net/socket/udp_socket.h"
++#include "net/base/net_errors.h"
++#include "third_party/rust/cxx/v1/cxx.h"
++#include "content/browser/tempo_sync/rust_tempo_sync_bridge.rs.h"
++
++namespace content {
++
++struct NetworkInfo {
++  uint32_t interface_index;
++  net::IPAddress address;
++  uint32_t prefix_length;
++};
++
++class RustTempoSyncEngine::Core : public base::RefCountedThreadSafe<Core> {
++ public:
++  Core(scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner,
++       base::WeakPtr<RustTempoSyncEngine> engine_weak)
++      : ui_task_runner_(ui_task_runner), engine_weak_(engine_weak) {}
++
++  void Init() {
++    uint64_t node_id = base::RandUint64();
++    rust_engine_.emplace(content::tempo_sync_bridge::create_engine(node_id));
++    
++    net::NetworkInterfaceList networks;
++    net::GetNetworkList(&networks, net::INCLUDE_HOST_SCOPE_VIRTUAL_INTERFACES);
++
++    bool has_ipv4 = false;
++    for (const auto& net : networks) {
++      if (net.address.IsIPv4()) {
++        has_ipv4 = true;
++        break;
++      }
++    }
++    if (!has_ipv4) {
++      networks.push_back(net::NetworkInterface(
++          "lo", "lo", 1, net::NetworkChangeNotifier::CONNECTION_UNKNOWN,
++          net::IPAddress::IPv4Localhost(), 8,
++          net::IP_ADDRESS_ATTRIBUTE_NONE));
++    }
++
++    multicast_socket_ = std::make_unique<net::UDPSocket>(net::DatagramSocket::DEFAULT_BIND, nullptr, net::NetLogSource());
++    int rv = multicast_socket_->Open(net::ADDRESS_FAMILY_IPV4);
++    if (rv != net::OK) LOG(ERROR) << "multicast Open failed: " << rv;
++
++    rv = multicast_socket_->AllowAddressSharingForMulticast();
++    if (rv != net::OK) LOG(ERROR) << "AllowAddressSharingForMulticast failed: " << rv;
++
++    rv = multicast_socket_->SetMulticastLoopbackMode(true);
++    if (rv != net::OK) LOG(ERROR) << "SetMulticastLoopbackMode failed: " << rv;
++
++    rv = multicast_socket_->SetMulticastTimeToLive(5);
++    if (rv != net::OK) LOG(ERROR) << "SetMulticastTimeToLive failed: " << rv;
++
++    rv = multicast_socket_->Bind(net::IPEndPoint(net::IPAddress::IPv4AllZeros(), 20808));
++    if (rv != net::OK) LOG(ERROR) << "multicast Bind failed: " << rv;
++
++    net::IPAddress mc_addr(224, 76, 78, 75);
++
++    for (const auto& net : networks) {
++      if (!net.address.IsIPv4()) continue;
++      
++      uint32_t iface_id = net.interface_index;
++      networks_.push_back({iface_id, net.address, net.prefix_length});
++      
++      multicast_socket_->SetMulticastInterface(iface_id);
++      rv = multicast_socket_->JoinGroup(mc_addr);
++      if (rv != net::OK) VLOG(1) << "JoinGroup skipped on " << net.address.ToString() << ": " << rv;
++      else VLOG(1) << "Joined multicast on interface " << net.address.ToString();
++
++      if (unicast_sockets_.find(iface_id) != unicast_sockets_.end()) continue;
++
++      auto unicast = std::make_unique<net::UDPSocket>(net::DatagramSocket::DEFAULT_BIND, nullptr, net::NetLogSource());
++      rv = unicast->Open(net::ADDRESS_FAMILY_IPV4);
++      if (rv != net::OK) { LOG(ERROR) << "unicast Open failed: " << rv; continue; }
++
++      unicast->SetMulticastLoopbackMode(true);
++      unicast->SetMulticastTimeToLive(5);
++      unicast->SetMulticastInterface(iface_id);
++
++      net::IPEndPoint local_ep(net.address, 0);
++      rv = unicast->Bind(local_ep);
++      if (rv != net::OK) { LOG(ERROR) << "unicast Bind failed on " << net.address.ToString() << ": " << rv; continue; }
++
++      net::IPEndPoint bound_ep;
++      unicast->GetLocalAddress(&bound_ep);
++      
++      unicast_sockets_[iface_id] = std::move(unicast);
++      ReadUnicast(iface_id);
++
++      std::array<uint8_t, 4> ip = {0,0,0,0};
++      auto bytes = bound_ep.address().bytes();
++      std::copy(bytes.begin(), bytes.end(), ip.begin());
++      ProcessEvents((*rust_engine_)->add_interface(iface_id, ip, bound_ep.port()));
++    }
++    
++    ReadMulticast();
++    ProcessEvents((*rust_engine_)->set_enabled(true, GetNowMicros()));
++  }
++
++  void SetTimeline(blink::mojom::TimelinePtr timeline) {
++    if (!rust_engine_) return;
++    content::tempo_sync_bridge::TimelineData tl_data;
++    tl_data.tempo = timeline->tempo_bpm;
++    tl_data.beat_origin = timeline->beat_origin;
++    tl_data.time_origin_micros = timeline->time_origin.since_origin().InMicroseconds();
++    
++    content::tempo_sync_bridge::StartStopData ss_data = (*rust_engine_)->get_start_stop();
++    ProcessEvents((*rust_engine_)->commit_app_state(tl_data, ss_data, GetNowMicros()));
++  }
++
++  void SetStartStop(blink::mojom::StartStopStatePtr state) {
++    if (!rust_engine_) return;
++    content::tempo_sync_bridge::StartStopData ss_data;
++    ss_data.is_playing = state->is_playing;
++    ss_data.beat = state->beat;
++    ss_data.time_micros = state->time.since_origin().InMicroseconds();
++    
++    content::tempo_sync_bridge::TimelineData tl_data = (*rust_engine_)->get_timeline();
++    ProcessEvents((*rust_engine_)->commit_app_state(tl_data, ss_data, GetNowMicros()));
++  }
++
++  void Shutdown() {
++    timer_.Stop();
++    multicast_socket_.reset();
++    unicast_sockets_.clear();
++    rust_engine_.reset();
++  }
++
++ private:
++  friend class base::RefCountedThreadSafe<Core>;
++  ~Core() {}
++
++  int64_t GetNowMicros() {
++    return base::TimeTicks::Now().since_origin().InMicroseconds();
++  }
++
++  void ProcessEvents(const rust::Vec<content::tempo_sync_bridge::OutputEvent>& events) {
++    for (const auto& ev : events) {
++      switch (ev.tag) {
++        case 1: { // StateChanged
++          auto tl = blink::mojom::Timeline::New();
++          tl->tempo_bpm = ev.timeline.tempo;
++          tl->beat_origin = ev.timeline.beat_origin;
++          tl->time_origin = base::TimeTicks() + base::Microseconds(ev.timeline.time_origin_micros);
++
++          auto ss = blink::mojom::StartStopState::New();
++          ss->is_playing = ev.start_stop.is_playing;
++          ss->beat = ev.start_stop.beat;
++          ss->time = base::TimeTicks() + base::Microseconds(ev.start_stop.time_micros);
++
++          VLOG(1) << "StateChanged tempo=" << tl->tempo_bpm;
++          ui_task_runner_->PostTask(FROM_HERE,
++              base::BindOnce(&RustTempoSyncEngine::OnStateChanged, engine_weak_,
++                             std::move(tl), std::move(ss)));
++          break;
++        }
++        case 2: // NumPeersChanged
++          VLOG(1) << "NumPeersChanged peers=" << ev.num_peers;
++          ui_task_runner_->PostTask(FROM_HERE,
++              base::BindOnce(&RustTempoSyncEngine::OnNumPeersChanged, engine_weak_,
++                             ev.num_peers));
++          break;
++        case 3: { // Send
++          auto buf = base::MakeRefCounted<net::IOBufferWithSize>(ev.bytes.size());
++          memcpy(buf->data(), ev.bytes.data(), ev.bytes.size());
++          net::IPAddress addr(ev.ip[0], ev.ip[1], ev.ip[2], ev.ip[3]);
++          net::IPEndPoint ep(addr, ev.port);
++          
++          uint8_t payload_byte = ev.bytes.size() > 8 ? ev.bytes[8] : 0;
++          VLOG(1) << "Send iface=" << ev.iface_id << " to=" << ep.ToString() 
++                  << " len=" << ev.bytes.size() << " payload_byte=" << (int)payload_byte;
++
++          bool is_multicast = (addr == net::IPAddress(224, 76, 78, 75));
++          auto it = unicast_sockets_.find(ev.iface_id);
++          if (it == unicast_sockets_.end() && !unicast_sockets_.empty()) {
++            it = unicast_sockets_.begin();
++          }
++          if (it != unicast_sockets_.end() && it->second) {
++            int rv = it->second->SendTo(buf.get(), ev.bytes.size(), ep,
++                base::BindOnce(&Core::OnSendDone, this, is_multicast));
++            if (rv < 0 && rv != net::ERR_IO_PENDING) {
++              LOG(ERROR) << (is_multicast ? "multicast" : "unicast")
++                         << " SendTo failed synchronously: " << rv;
++            }
++          } else if (is_multicast && multicast_socket_) {
++            int rv = multicast_socket_->SendTo(buf.get(), ev.bytes.size(), ep,
++                base::BindOnce(&Core::OnSendDone, this, true));
++            if (rv < 0 && rv != net::ERR_IO_PENDING) {
++              LOG(ERROR) << "multicast SendTo failed synchronously: " << rv;
++            }
++          } else {
++            LOG(ERROR) << "Send dropped: no socket available for iface " << ev.iface_id;
++          }
++          break;
++        }
++        case 7: { // SetTimer
++          int64_t delay = ev.time_micros - GetNowMicros();
++          VLOG(1) << "SetTimer deadline_in=" << delay << "us";
++          if (delay < 0) delay = 0;
++          timer_.Start(FROM_HERE, base::Microseconds(delay),
++                       this, &Core::OnTimer);
++          break;
++        }
++      }
++    }
++  }
++
++  void OnTimer() {
++    if (rust_engine_) {
++      ProcessEvents((*rust_engine_)->handle_timer(GetNowMicros()));
++    }
++  }
++
++
++  void ReadMulticast() {
++    if (!multicast_socket_) return;
++    int rv;
++    do {
++      auto buf = base::MakeRefCounted<net::IOBufferWithSize>(65536);
++      rv = multicast_socket_->RecvFrom(
++          buf.get(), 65536, &recv_address_,
++          base::BindOnce(&Core::OnMulticastRead, this, buf));
++      if (rv > 0) {
++        ProcessMulticastRead(buf, rv);
++      }
++    } while (rv > 0);
++  }
++
++  void OnMulticastRead(scoped_refptr<net::IOBuffer> buf, int rv) {
++    if (rv > 0) {
++      ProcessMulticastRead(buf, rv);
++      ReadMulticast();
++    }
++  }
++
++  void ProcessMulticastRead(scoped_refptr<net::IOBuffer> buf, int rv) {
++    if (multicast_socket_ && rust_engine_) {
++      std::array<uint8_t, 4> ip = {0,0,0,0};
++      if (recv_address_.address().IsIPv4()) {
++        auto bytes = recv_address_.address().bytes();
++        std::copy(bytes.begin(), bytes.end(), ip.begin());
++      }
++      
++      uint32_t iface_id = 0;
++      for (const auto& net : networks_) {
++        if (net::IPAddressMatchesPrefix(recv_address_.address(), net.address, net.prefix_length)) {
++          iface_id = net.interface_index;
++          break;
++        }
++      }
++      if (iface_id == 0 && !networks_.empty()) {
++        iface_id = networks_.front().interface_index;
++      }
++      
++      uint8_t payload_byte = rv > 8 ? buf->data()[8] : 0;
++      VLOG(1) << "RecvMulticast iface=" << iface_id << " from=" << recv_address_.ToString() 
++              << " len=" << rv << " payload_byte=" << (int)payload_byte;
++
++      rust::Slice<const uint8_t> data(reinterpret_cast<const uint8_t*>(buf->data()), rv);
++      ProcessEvents((*rust_engine_)->handle_packet(
++          iface_id, ip, recv_address_.port(), data, GetNowMicros()));
++    }
++  }
++
++  void ReadUnicast(uint32_t iface_id) {
++    auto it = unicast_sockets_.find(iface_id);
++    if (it == unicast_sockets_.end() || !it->second) return;
++    int rv;
++    do {
++      auto buf = base::MakeRefCounted<net::IOBufferWithSize>(65536);
++      rv = it->second->RecvFrom(
++          buf.get(), 65536, &unicast_recv_addrs_[iface_id],
++          base::BindOnce(&Core::OnUnicastRead, this, iface_id, buf));
++      if (rv > 0) {
++        ProcessUnicastRead(iface_id, buf, rv);
++      }
++    } while (rv > 0);
++  }
++
++  void OnUnicastRead(uint32_t iface_id, scoped_refptr<net::IOBuffer> buf, int rv) {
++    if (rv > 0) {
++      ProcessUnicastRead(iface_id, buf, rv);
++      ReadUnicast(iface_id);
++    }
++  }
++
++  void ProcessUnicastRead(uint32_t iface_id, scoped_refptr<net::IOBuffer> buf, int rv) {
++    if (rust_engine_) {
++      net::IPEndPoint& recv_addr = unicast_recv_addrs_[iface_id];
++      std::array<uint8_t, 4> ip = {0,0,0,0};
++      if (recv_addr.address().IsIPv4()) {
++        auto bytes = recv_addr.address().bytes();
++        std::copy(bytes.begin(), bytes.end(), ip.begin());
++      }
++      
++      uint8_t payload_byte = rv > 8 ? buf->data()[8] : 0;
++      VLOG(1) << "RecvUnicast iface=" << iface_id << " from=" << recv_addr.ToString() 
++              << " len=" << rv << " payload_byte=" << (int)payload_byte;
++
++      rust::Slice<const uint8_t> data(reinterpret_cast<const uint8_t*>(buf->data()), rv);
++      ProcessEvents((*rust_engine_)->handle_packet(
++          iface_id, ip, recv_addr.port(), data, GetNowMicros()));
++    }
++  }
++
++  void OnSendDone(bool is_multicast, int rv) {
++    if (rv < 0) {
++      LOG(ERROR) << (is_multicast ? "multicast" : "unicast") << " async SendTo failed: " << rv;
++    }
++  }
++
++  scoped_refptr<base::SingleThreadTaskRunner> ui_task_runner_;
++  base::WeakPtr<RustTempoSyncEngine> engine_weak_;
++  
++  std::optional<rust::Box<content::tempo_sync_bridge::RustEngine>> rust_engine_;
++  std::unique_ptr<net::UDPSocket> multicast_socket_;
++  std::map<uint32_t, std::unique_ptr<net::UDPSocket>> unicast_sockets_;
++  std::map<uint32_t, net::IPEndPoint> unicast_recv_addrs_;
++  net::IPEndPoint recv_address_;
++  base::OneShotTimer timer_;
++  std::vector<NetworkInfo> networks_;
++};
++
++// --- RustTempoSyncEngine ---
++
++RustTempoSyncEngine::RustTempoSyncEngine() : weak_factory_(this) {
++  timeline_ = blink::mojom::Timeline::New(120.0, 0.0, base::TimeTicks::Now());
++  start_stop_ = blink::mojom::StartStopState::New(false, 0.0, base::TimeTicks::Now());
++
++  engine_thread_ = std::make_unique<base::Thread>("TempoSyncEngineThread");
++  base::Thread::Options options;
++  options.message_pump_type = base::MessagePumpType::IO;
++  engine_thread_->StartWithOptions(std::move(options));
++
++  core_ = base::MakeRefCounted<Core>(
++      base::SingleThreadTaskRunner::GetCurrentDefault(),
++      weak_factory_.GetWeakPtr());
++
++  engine_thread_->task_runner()->PostTask(
++      FROM_HERE, base::BindOnce(&Core::Init, core_));
++}
++
++RustTempoSyncEngine::~RustTempoSyncEngine() {
++  engine_thread_->task_runner()->PostTask(
++      FROM_HERE, base::BindOnce(&Core::Shutdown, core_));
++  engine_thread_->Stop();
++}
++
++void RustTempoSyncEngine::AddObserver(Observer* observer) {
++  observers_.AddObserver(observer);
++}
++
++void RustTempoSyncEngine::RemoveObserver(Observer* observer) {
++  observers_.RemoveObserver(observer);
++}
++
++void RustTempoSyncEngine::SetTimeline(blink::mojom::TimelinePtr timeline) {
++  engine_thread_->task_runner()->PostTask(
++      FROM_HERE, base::BindOnce(&Core::SetTimeline, core_, timeline->Clone()));
++}
++
++void RustTempoSyncEngine::SetStartStop(blink::mojom::StartStopStatePtr state) {
++  engine_thread_->task_runner()->PostTask(
++      FROM_HERE, base::BindOnce(&Core::SetStartStop, core_, state->Clone()));
++}
++
++blink::mojom::TimelinePtr RustTempoSyncEngine::GetTimeline() const {
++  return timeline_->Clone();
++}
++
++blink::mojom::StartStopStatePtr RustTempoSyncEngine::GetStartStop() const {
++  return start_stop_->Clone();
++}
++
++uint32_t RustTempoSyncEngine::GetNumPeers() const {
++  return num_peers_;
++}
++
++void RustTempoSyncEngine::OnStateChanged(blink::mojom::TimelinePtr timeline, blink::mojom::StartStopStatePtr state) {
++  timeline_ = std::move(timeline);
++  start_stop_ = std::move(state);
++  for (auto& obs : observers_) {
++    obs.OnTimelineChanged(timeline_->Clone());
++    obs.OnStartStopChanged(start_stop_->Clone());
++  }
++}
++
++void RustTempoSyncEngine::OnNumPeersChanged(uint32_t num_peers) {
++  num_peers_ = num_peers;
++  for (auto& obs : observers_) {
++    obs.OnNumPeersChanged(num_peers_);
++  }
++}
++
++}  // namespace content
+diff --git a/content/browser/tempo_sync/rust_tempo_sync_engine.h b/content/browser/tempo_sync/rust_tempo_sync_engine.h
+new file mode 100644
+index 0000000000000..7822679e9f20e
+--- /dev/null
++++ b/content/browser/tempo_sync/rust_tempo_sync_engine.h
+@@ -0,0 +1,48 @@
++#ifndef CONTENT_BROWSER_TEMPO_SYNC_RUST_TEMPO_SYNC_ENGINE_H_
++#define CONTENT_BROWSER_TEMPO_SYNC_RUST_TEMPO_SYNC_ENGINE_H_
++
++#include <memory>
++
++#include "base/memory/scoped_refptr.h"
++#include "base/memory/weak_ptr.h"
++#include "base/observer_list.h"
++#include "base/threading/thread.h"
++#include "content/browser/tempo_sync/tempo_sync_engine.h"
++
++namespace content {
++
++class RustTempoSyncEngine : public TempoSyncEngine {
++ public:
++  RustTempoSyncEngine();
++  ~RustTempoSyncEngine() override;
++
++  // TempoSyncEngine
++  void AddObserver(Observer* observer) override;
++  void RemoveObserver(Observer* observer) override;
++
++  void SetTimeline(blink::mojom::TimelinePtr timeline) override;
++  void SetStartStop(blink::mojom::StartStopStatePtr state) override;
++  blink::mojom::TimelinePtr GetTimeline() const override;
++  blink::mojom::StartStopStatePtr GetStartStop() const override;
++  uint32_t GetNumPeers() const override;
++
++ private:
++  class Core;
++
++  void OnStateChanged(blink::mojom::TimelinePtr timeline, blink::mojom::StartStopStatePtr state);
++  void OnNumPeersChanged(uint32_t num_peers);
++
++  base::ObserverList<Observer>::Unchecked observers_;
++  blink::mojom::TimelinePtr timeline_;
++  blink::mojom::StartStopStatePtr start_stop_;
++  uint32_t num_peers_ = 0;
++
++  std::unique_ptr<base::Thread> engine_thread_;
++  scoped_refptr<Core> core_;
++  
++  base::WeakPtrFactory<RustTempoSyncEngine> weak_factory_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_BROWSER_TEMPO_SYNC_RUST_TEMPO_SYNC_ENGINE_H_
+diff --git a/content/browser/tempo_sync/tempo_session_host.cc b/content/browser/tempo_sync/tempo_session_host.cc
+new file mode 100644
+index 0000000000000..cf6ca7ee261e4
+--- /dev/null
++++ b/content/browser/tempo_sync/tempo_session_host.cc
+@@ -0,0 +1,70 @@
++#include "content/browser/tempo_sync/tempo_session_host.h"
++#include "base/memory/ptr_util.h"
++#include "base/command_line.h"
++#include "content/browser/tempo_sync/fake_tempo_sync_engine.h"
++#include "content/browser/tempo_sync/rust_tempo_sync_engine.h"
++
++namespace content {
++
++namespace {
++const char kTempoSessionHostKey[] = "TempoSessionHostKey";
++}
++
++// static
++TempoSessionHost* TempoSessionHost::GetForBrowserContext(BrowserContext* context) {
++  if (!context->GetUserData(kTempoSessionHostKey)) {
++    context->SetUserData(kTempoSessionHostKey, std::make_unique<TempoSessionHost>());
++  }
++  return static_cast<TempoSessionHost*>(context->GetUserData(kTempoSessionHostKey));
++}
++
++TempoSessionHost::TempoSessionHost() {
++  std::string engine_type = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("tempo-sync-engine");
++  if (engine_type == "fake") {
++    engine_ = std::make_unique<FakeTempoSyncEngine>();
++  } else {
++    engine_ = std::make_unique<RustTempoSyncEngine>();
++  }
++  engine_->AddObserver(this);
++}
++
++TempoSessionHost::~TempoSessionHost() {
++  engine_->RemoveObserver(this);
++}
++
++void TempoSessionHost::AddClient(mojo::PendingReceiver<blink::mojom::TempoSession> receiver,
++                                 mojo::PendingRemote<blink::mojom::TempoSessionClient> client) {
++  receivers_.Add(this, std::move(receiver));
++  clients_.Add(std::move(client));
++}
++
++void TempoSessionHost::CommitTimeline(blink::mojom::TimelinePtr timeline) {
++  engine_->SetTimeline(std::move(timeline));
++}
++
++void TempoSessionHost::CommitStartStop(blink::mojom::StartStopStatePtr state) {
++  engine_->SetStartStop(std::move(state));
++}
++
++void TempoSessionHost::Close() {
++}
++
++void TempoSessionHost::OnTimelineChanged(blink::mojom::TimelinePtr timeline) {
++  for (auto& client : clients_) {
++    client->OnTimelineChanged(timeline->Clone());
++  }
++}
++
++void TempoSessionHost::OnStartStopChanged(blink::mojom::StartStopStatePtr state) {
++  for (auto& client : clients_) {
++    client->OnStartStopChanged(state->Clone());
++  }
++}
++
++void TempoSessionHost::OnNumPeersChanged(uint32_t num_peers) {
++  for (auto& client : clients_) {
++    client->OnNumPeersChanged(num_peers);
++  }
++}
++
++}  // namespace content
+diff --git a/content/browser/tempo_sync/tempo_session_host.h b/content/browser/tempo_sync/tempo_session_host.h
+new file mode 100644
+index 0000000000000..9b97724f2099c
+--- /dev/null
++++ b/content/browser/tempo_sync/tempo_session_host.h
+@@ -0,0 +1,45 @@
++#ifndef CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SESSION_HOST_H_
++#define CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SESSION_HOST_H_
++
++#include <memory>
++#include "base/memory/singleton.h"
++#include "base/supports_user_data.h"
++#include "content/browser/tempo_sync/tempo_sync_engine.h"
++#include "content/public/browser/browser_context.h"
++#include "mojo/public/cpp/bindings/remote_set.h"
++#include "mojo/public/cpp/bindings/receiver_set.h"
++#include "third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom.h"
++
++namespace content {
++
++class TempoSessionHost : public blink::mojom::TempoSession, public TempoSyncEngine::Observer, public base::SupportsUserData::Data {
++ public:
++  static TempoSessionHost* GetForBrowserContext(BrowserContext* context);
++
++  TempoSessionHost();
++  ~TempoSessionHost() override;
++
++  void AddClient(mojo::PendingReceiver<blink::mojom::TempoSession> receiver, mojo::PendingRemote<blink::mojom::TempoSessionClient> client);
++
++  void CommitTimeline(blink::mojom::TimelinePtr timeline) override;
++  void CommitStartStop(blink::mojom::StartStopStatePtr state) override;
++  blink::mojom::TimelinePtr GetTimeline() const { return engine_->GetTimeline(); }
++  blink::mojom::StartStopStatePtr GetStartStop() const { return engine_->GetStartStop(); }
++  uint32_t GetNumPeers() const { return engine_->GetNumPeers(); }
++  void Close() override;
++
++
++  // TempoSyncEngine::Observer
++  void OnTimelineChanged(blink::mojom::TimelinePtr timeline) override;
++  void OnStartStopChanged(blink::mojom::StartStopStatePtr state) override;
++  void OnNumPeersChanged(uint32_t num_peers) override;
++
++ private:
++  std::unique_ptr<TempoSyncEngine> engine_;
++  mojo::RemoteSet<blink::mojom::TempoSessionClient> clients_;
++  mojo::ReceiverSet<blink::mojom::TempoSession> receivers_;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SESSION_HOST_H_
+\ No newline at end of file
+diff --git a/content/browser/tempo_sync/tempo_sync_engine.h b/content/browser/tempo_sync/tempo_sync_engine.h
+new file mode 100644
+index 0000000000000..56dfd43a7200e
+--- /dev/null
++++ b/content/browser/tempo_sync/tempo_sync_engine.h
+@@ -0,0 +1,31 @@
++#ifndef CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SYNC_ENGINE_H_
++#define CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SYNC_ENGINE_H_
++
++#include "third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom.h"
++
++namespace content {
++
++class TempoSyncEngine {
++ public:
++  class Observer {
++   public:
++    virtual void OnTimelineChanged(blink::mojom::TimelinePtr timeline) = 0;
++    virtual void OnStartStopChanged(blink::mojom::StartStopStatePtr state) = 0;
++    virtual void OnNumPeersChanged(uint32_t num_peers) = 0;
++  };
++
++  virtual ~TempoSyncEngine() = default;
++
++  virtual void AddObserver(Observer* observer) = 0;
++  virtual void RemoveObserver(Observer* observer) = 0;
++
++  virtual void SetTimeline(blink::mojom::TimelinePtr timeline) = 0;
++  virtual void SetStartStop(blink::mojom::StartStopStatePtr state) = 0;
++  virtual blink::mojom::TimelinePtr GetTimeline() const = 0;
++  virtual blink::mojom::StartStopStatePtr GetStartStop() const = 0;
++  virtual uint32_t GetNumPeers() const = 0;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SYNC_ENGINE_H_
+\ No newline at end of file
+diff --git a/content/browser/tempo_sync/tempo_sync_service_impl.cc b/content/browser/tempo_sync/tempo_sync_service_impl.cc
+new file mode 100644
+index 0000000000000..1a716d62c8c0a
+--- /dev/null
++++ b/content/browser/tempo_sync/tempo_sync_service_impl.cc
+@@ -0,0 +1,41 @@
++#include "content/browser/tempo_sync/tempo_sync_service_impl.h"
++
++#include "content/browser/tempo_sync/tempo_session_host.h"
++#include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/web_contents.h"
++
++namespace content {
++
++// static
++void TempoSyncServiceImpl::Create(
++    RenderFrameHost* render_frame_host,
++    mojo::PendingReceiver<blink::mojom::TempoSyncService> receiver) {
++  CHECK(render_frame_host);
++  new TempoSyncServiceImpl(*render_frame_host, std::move(receiver));
++}
++
++TempoSyncServiceImpl::TempoSyncServiceImpl(
++    RenderFrameHost& render_frame_host,
++    mojo::PendingReceiver<blink::mojom::TempoSyncService> receiver)
++    : DocumentService(render_frame_host, std::move(receiver)) {}
++
++TempoSyncServiceImpl::~TempoSyncServiceImpl() = default;
++
++void TempoSyncServiceImpl::RequestSession(
++    blink::mojom::TempoSessionOptionsPtr options,
++    mojo::PendingRemote<blink::mojom::TempoSessionClient> client,
++    RequestSessionCallback callback) {
++  // TODO(tempo-sync): Check permission if required here.
++
++  auto* host = TempoSessionHost::GetForBrowserContext(
++      render_frame_host().GetBrowserContext());
++  
++  mojo::PendingRemote<blink::mojom::TempoSession> session_remote;
++  auto session_receiver = session_remote.InitWithNewPipeAndPassReceiver();
++
++  host->AddClient(std::move(session_receiver), std::move(client));
++
++  std::move(callback).Run(std::move(session_remote), host->GetTimeline(), host->GetStartStop(), host->GetNumPeers(), std::nullopt);
++}
++
++}  // namespace content
+diff --git a/content/browser/tempo_sync/tempo_sync_service_impl.h b/content/browser/tempo_sync/tempo_sync_service_impl.h
+new file mode 100644
+index 0000000000000..0284b811139b0
+--- /dev/null
++++ b/content/browser/tempo_sync/tempo_sync_service_impl.h
+@@ -0,0 +1,29 @@
++#ifndef CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SYNC_SERVICE_IMPL_H_
++#define CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SYNC_SERVICE_IMPL_H_
++
++#include "content/public/browser/document_service.h"
++#include "third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom.h"
++
++namespace content {
++
++class TempoSyncServiceImpl
++    : public DocumentService<blink::mojom::TempoSyncService> {
++ public:
++  static void Create(
++      RenderFrameHost* render_frame_host,
++      mojo::PendingReceiver<blink::mojom::TempoSyncService> receiver);
++
++  TempoSyncServiceImpl(
++      RenderFrameHost& render_frame_host,
++      mojo::PendingReceiver<blink::mojom::TempoSyncService> receiver);
++  ~TempoSyncServiceImpl() override;
++
++  // blink::mojom::TempoSyncService
++  void RequestSession(blink::mojom::TempoSessionOptionsPtr options,
++                      mojo::PendingRemote<blink::mojom::TempoSessionClient> client,
++                      RequestSessionCallback callback) override;
++};
++
++}  // namespace content
++
++#endif  // CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SYNC_SERVICE_IMPL_H_
+\ No newline at end of file
+diff --git a/third_party/blink/public/mojom/BUILD.gn b/third_party/blink/public/mojom/BUILD.gn
+index dfbc339197ceb..5b726454cb14e 100644
+--- a/third_party/blink/public/mojom/BUILD.gn
++++ b/third_party/blink/public/mojom/BUILD.gn
+@@ -279,6 +279,7 @@ mojom("mojom_platform") {
+     "web_install/web_install.mojom",
+     "web_launch/web_launch.mojom",
+     "webaudio/audio_context_manager.mojom",
++    "tempo_sync/tempo_sync.mojom",
+     "webid/digital_identity_request.mojom",
+     "webid/email_verification_request.mojom",
+     "webid/fedcm_identity_request.mojom",
+diff --git a/third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom b/third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom
+new file mode 100644
+index 0000000000000..a85c6c3d4bcbb
+--- /dev/null
++++ b/third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom
+@@ -0,0 +1,37 @@
++module blink.mojom;
++
++import "mojo/public/mojom/base/time.mojom";
++
++struct Timeline {
++  double tempo_bpm;
++  double beat_origin;
++  mojo_base.mojom.TimeTicks time_origin;
++};
++
++struct StartStopState {
++  bool is_playing;
++  double beat;
++  mojo_base.mojom.TimeTicks time;
++};
++
++struct TempoSessionOptions {
++  double quantum;
++  bool start_stop_sync;
++};
++
++interface TempoSyncService {
++  RequestSession(TempoSessionOptions options, pending_remote<TempoSessionClient> client)
++      => (pending_remote<TempoSession>? session, Timeline? timeline, StartStopState? start_stop, uint32 num_peers, string? error_message);
++};
++
++interface TempoSession {
++  CommitTimeline(Timeline timeline);
++  CommitStartStop(StartStopState state);
++  Close();
++};
++
++interface TempoSessionClient {
++  OnTimelineChanged(Timeline timeline);
++  OnStartStopChanged(StartStopState state);
++  OnNumPeersChanged(uint32 num_peers);
++};
+diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
+index b56e9a96ebd3d..cc85eb1999566 100644
+--- a/third_party/blink/renderer/bindings/generated_in_modules.gni
++++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
+@@ -122,6 +122,8 @@ generated_dictionary_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_address_init.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_all_accepted_credentials_options.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_all_accepted_credentials_options.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_tempo_session_options.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_tempo_session_options.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_analyser_options.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_analyser_options.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_android_pay_method_data.cc",
+@@ -2067,6 +2069,12 @@ generated_interface_sources_in_modules = [
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_ads.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_ambient_light_sensor.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_ambient_light_sensor.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_tempo_session.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_tempo_session.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_tempo_session_state.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_tempo_session_state.h",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_tempo_sync.cc",
++  "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_tempo_sync.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_analyser_node.cc",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_analyser_node.h",
+   "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_angle_instanced_arrays.cc",
+diff --git a/third_party/blink/renderer/bindings/idl_in_modules.gni b/third_party/blink/renderer/bindings/idl_in_modules.gni
+index 68b809c784a4c..372ee2ea1c6ef 100644
+--- a/third_party/blink/renderer/bindings/idl_in_modules.gni
++++ b/third_party/blink/renderer/bindings/idl_in_modules.gni
+@@ -816,6 +816,11 @@ static_idl_files_in_modules = [
+   "//third_party/blink/renderer/modules/web_install/install_params.idl",
+   "//third_party/blink/renderer/modules/web_install/navigator_web_install.idl",
+   "//third_party/blink/renderer/modules/web_install/web_install_result.idl",
++  "//third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.idl",
++  "//third_party/blink/renderer/modules/tempo_sync/tempo_session.idl",
++  "//third_party/blink/renderer/modules/tempo_sync/tempo_session_options.idl",
++  "//third_party/blink/renderer/modules/tempo_sync/tempo_session_state.idl",
++  "//third_party/blink/renderer/modules/tempo_sync/tempo_sync.idl",
+   "//third_party/blink/renderer/modules/webaudio/analyser_node.idl",
+   "//third_party/blink/renderer/modules/webaudio/analyser_options.idl",
+   "//third_party/blink/renderer/modules/webaudio/audio_buffer.idl",
+diff --git a/third_party/blink/renderer/core/events/event_target_names.json5 b/third_party/blink/renderer/core/events/event_target_names.json5
+index a0e2048beae6d..eafe6cc4eb8ab 100644
+--- a/third_party/blink/renderer/core/events/event_target_names.json5
++++ b/third_party/blink/renderer/core/events/event_target_names.json5
+@@ -16,6 +16,7 @@
+     "ContainerQueryList",
+     "BroadcastChannel",
+     "MessagePort",
++    "TempoSession",
+     "Navigation",
+     "NavigationHistoryEntry",
+     "Node",
+diff --git a/third_party/blink/renderer/core/events/event_type_names.json5 b/third_party/blink/renderer/core/events/event_type_names.json5
+index 33896619fb2ef..54e5b00e99831 100644
+--- a/third_party/blink/renderer/core/events/event_type_names.json5
++++ b/third_party/blink/renderer/core/events/event_type_names.json5
+@@ -117,6 +117,9 @@
+     "ended",
+     "enter",
+     "enterpictureinpicture",
++    "numpeerschange",
++    "playingchange",
++    "tempochange",
+     "error",
+     "exit",
+     "fetch",
+diff --git a/third_party/blink/renderer/modules/BUILD.gn b/third_party/blink/renderer/modules/BUILD.gn
+index 9b0b898bdecf6..3964cb41f5ded 100644
+--- a/third_party/blink/renderer/modules/BUILD.gn
++++ b/third_party/blink/renderer/modules/BUILD.gn
+@@ -160,6 +160,7 @@ component("modules") {
+     "//third_party/blink/renderer/modules/webcodecs",
+     "//third_party/blink/renderer/modules/webgl",
+     "//third_party/blink/renderer/modules/webgpu",
++    "//third_party/blink/renderer/modules/tempo_sync",
+     "//third_party/blink/renderer/modules/webmidi",
+     "//third_party/blink/renderer/modules/webrtc",
+     "//third_party/blink/renderer/modules/webshare",
+diff --git a/third_party/blink/renderer/modules/tempo_sync/BUILD.gn b/third_party/blink/renderer/modules/tempo_sync/BUILD.gn
+new file mode 100644
+index 0000000000000..ee9d4d761d30e
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/BUILD.gn
+@@ -0,0 +1,17 @@
++import("//third_party/blink/renderer/modules/modules.gni")
++
++blink_modules_sources("tempo_sync") {
++  sources = [
++    "navigator_tempo_sync.cc",
++    "navigator_tempo_sync.h",
++    "tempo_session.cc",
++    "tempo_session.h",
++    "tempo_session_state.cc",
++    "tempo_session_state.h",
++    "tempo_sync.cc",
++    "tempo_sync.h",
++  ]
++  deps = [
++    "//third_party/blink/renderer/modules/webaudio",
++  ]
++}
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/DEPS b/third_party/blink/renderer/modules/tempo_sync/DEPS
+new file mode 100644
+index 0000000000000..5b96900531b58
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/DEPS
+@@ -0,0 +1,3 @@
++include_rules = [
++  "+third_party/blink/renderer/modules/webaudio",
++]
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.cc b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.cc
+new file mode 100644
+index 0000000000000..b6e039df13117
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.cc
+@@ -0,0 +1,39 @@
++#include "third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.h"
++
++#include "third_party/blink/renderer/core/frame/navigator.h"
++#include "third_party/blink/renderer/modules/tempo_sync/tempo_sync.h"
++
++namespace blink {
++
++const char NavigatorTempoSync::kSupplementName[] = "NavigatorTempoSync";
++
++NavigatorTempoSync& NavigatorTempoSync::From(Navigator& navigator) {
++  NavigatorTempoSync* supplement =
++      Supplement<Navigator>::From<NavigatorTempoSync>(navigator);
++  if (!supplement) {
++    supplement = MakeGarbageCollected<NavigatorTempoSync>(navigator);
++    ProvideTo(navigator, supplement);
++  }
++  return *supplement;
++}
++
++TempoSync* NavigatorTempoSync::tempoSync(Navigator& navigator) {
++  return NavigatorTempoSync::From(navigator).tempoSync();
++}
++
++NavigatorTempoSync::NavigatorTempoSync(Navigator& navigator)
++    : Supplement<Navigator>(navigator) {}
++
++TempoSync* NavigatorTempoSync::tempoSync() {
++  if (!tempo_sync_) {
++    tempo_sync_ = MakeGarbageCollected<TempoSync>(GetSupplementable());
++  }
++  return tempo_sync_.Get();
++}
++
++void NavigatorTempoSync::Trace(Visitor* visitor) const {
++  visitor->Trace(tempo_sync_);
++  Supplement<Navigator>::Trace(visitor);
++}
++
++}  // namespace blink
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.h b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.h
+new file mode 100644
+index 0000000000000..bf8a97e292c75
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.h
+@@ -0,0 +1,34 @@
++#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_NAVIGATOR_TEMPO_SYNC_H_
++#define THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_NAVIGATOR_TEMPO_SYNC_H_
++
++#include "third_party/blink/renderer/core/frame/navigator.h"
++#include "third_party/blink/renderer/platform/heap/garbage_collected.h"
++#include "third_party/blink/renderer/platform/supplementable.h"
++#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
++
++namespace blink {
++
++class Navigator;
++class TempoSync;
++
++class NavigatorTempoSync final : public GarbageCollected<NavigatorTempoSync>,
++                                 public Supplement<Navigator> {
++ public:
++  static const char kSupplementName[];
++
++  static NavigatorTempoSync& From(Navigator&);
++  static TempoSync* tempoSync(Navigator&);
++
++  explicit NavigatorTempoSync(Navigator&);
++
++  TempoSync* tempoSync();
++
++  void Trace(Visitor*) const override;
++
++ private:
++  Member<TempoSync> tempo_sync_;
++};
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_NAVIGATOR_TEMPO_SYNC_H_
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.idl b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.idl
+new file mode 100644
+index 0000000000000..293344209a1ef
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.idl
+@@ -0,0 +1 @@
++[ImplementedAs=NavigatorTempoSync, SecureContext, RuntimeEnabled=TempoSync] partial interface Navigator { readonly attribute TempoSync tempoSync; };
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session.cc b/third_party/blink/renderer/modules/tempo_sync/tempo_session.cc
+new file mode 100644
+index 0000000000000..4d39d000c837c
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session.cc
+@@ -0,0 +1,144 @@
++#include "third_party/blink/renderer/modules/tempo_sync/tempo_session.h"
++
++#include "third_party/blink/renderer/bindings/modules/v8/v8_tempo_session_options.h"
++#include "third_party/blink/renderer/core/dom/events/event.h"
++#include "third_party/blink/renderer/core/event_type_names.h"
++#include "third_party/blink/renderer/core/event_target_names.h"
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/core/timing/dom_window_performance.h"
++#include "third_party/blink/renderer/core/timing/window_performance.h"
++#include "third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h"
++#include "third_party/blink/renderer/modules/webaudio/audio_context.h"
++#include "third_party/blink/renderer/platform/bindings/exception_state.h"
++
++namespace blink {
++
++TempoSession::TempoSession(ExecutionContext* context,
++                           const TempoSessionOptions* options)
++    : ExecutionContextLifecycleObserver(context),
++      remote_(context),
++      receiver_(this, context) {
++  quantum_ = options->quantum();
++}
++
++TempoSession::~TempoSession() = default;
++
++mojo::PendingRemote<mojom::blink::TempoSessionClient>
++TempoSession::BindNewPipeAndPassRemote() {
++  return receiver_.BindNewPipeAndPassRemote(
++      GetExecutionContext()->GetTaskRunner(TaskType::kMiscPlatformAPI));
++}
++
++void TempoSession::BindRemote(
++    mojo::PendingRemote<mojom::blink::TempoSession> remote) {
++  remote_.Bind(
++      std::move(remote),
++      GetExecutionContext()->GetTaskRunner(TaskType::kMiscPlatformAPI));
++}
++
++TempoSessionState* TempoSession::captureState(ExceptionState& exception_state) {
++  return captureState(nullptr, exception_state);
++}
++
++TempoSessionState* TempoSession::captureState(BaseAudioContext* context, ExceptionState& exception_state) {
++  if (!latest_timeline_ || !latest_start_stop_) {
++    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError, "Session unseeded");
++    return nullptr;
++  }
++
++  base::TimeTicks host_time_origin;
++  double local_time_origin;
++
++  AudioContext* audio_context = nullptr;
++  if (context && context->HasRealtimeConstraint()) {
++    audio_context = static_cast<AudioContext*>(context);
++  }
++  if (audio_context) {
++    auto pos = audio_context->GetOutputPositionForTempoSync();
++    if (pos.second.is_null()) {
++      local_time_origin = audio_context->currentTime();
++      host_time_origin = base::TimeTicks::Now();
++    } else {
++      local_time_origin = pos.first;
++      host_time_origin = pos.second;
++    }
++  } else {
++    LocalDOMWindow* window = To<LocalDOMWindow>(GetExecutionContext());
++    WindowPerformance* performance = DOMWindowPerformance::performance(*window);
++    host_time_origin = base::TimeTicks::Now();
++    local_time_origin = performance->MonotonicTimeToDOMHighResTimeStamp(host_time_origin) / 1000.0;
++  }
++
++  return MakeGarbageCollected<TempoSessionState>(
++      latest_timeline_->Clone(), latest_start_stop_->Clone(),
++      host_time_origin, local_time_origin, quantum_);
++}
++
++void TempoSession::commitState(TempoSessionState* state, ExceptionState& exception_state) {
++  if (!remote_.is_bound()) {
++    return;
++  }
++  remote_->CommitTimeline(state->CloneTimeline());
++  remote_->CommitStartStop(state->CloneStartStop());
++}
++
++void TempoSession::close() {
++  if (remote_.is_bound()) {
++    remote_->Close();
++    remote_.reset();
++  }
++  receiver_.reset();
++}
++
++const AtomicString& TempoSession::InterfaceName() const {
++  return event_target_names::kTempoSession;
++}
++
++ExecutionContext* TempoSession::GetExecutionContext() const {
++  return ExecutionContextLifecycleObserver::GetExecutionContext();
++}
++
++void TempoSession::OnTimelineChanged(mojom::blink::TimelinePtr timeline) {
++  bool tempo_changed = false;
++  if (!latest_timeline_ || latest_timeline_->tempo_bpm != timeline->tempo_bpm) {
++    tempo_changed = true;
++  }
++  latest_timeline_ = std::move(timeline);
++  
++  if (tempo_changed) {
++    DispatchEvent(*Event::Create(event_type_names::kTempochange));
++  }
++}
++
++void TempoSession::OnStartStopChanged(mojom::blink::StartStopStatePtr state) {
++  bool playing_changed = false;
++  if (!latest_start_stop_ || latest_start_stop_->is_playing != state->is_playing) {
++    playing_changed = true;
++  }
++  latest_start_stop_ = std::move(state);
++
++  if (playing_changed) {
++    DispatchEvent(*Event::Create(event_type_names::kPlayingchange));
++  }
++}
++
++void TempoSession::OnNumPeersChanged(uint32_t num_peers) {
++  if (num_peers_ != num_peers) {
++    num_peers_ = num_peers;
++    DispatchEvent(*Event::Create(event_type_names::kNumpeerschange));
++  }
++}
++
++void TempoSession::ContextDestroyed() {
++  remote_.reset();
++  receiver_.reset();
++}
++
++void TempoSession::Trace(Visitor* visitor) const {
++  visitor->Trace(remote_);
++  visitor->Trace(receiver_);
++  EventTarget::Trace(visitor);
++  ExecutionContextLifecycleObserver::Trace(visitor);
++}
++
++}  // namespace blink
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session.h b/third_party/blink/renderer/modules/tempo_sync/tempo_session.h
+new file mode 100644
+index 0000000000000..0d92a308899cd
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session.h
+@@ -0,0 +1,70 @@
++#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_H_
++#define THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_H_
++
++#include "third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom-blink.h"
++#include "third_party/blink/renderer/core/dom/events/event_target.h"
++#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
++#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
++#include "third_party/blink/renderer/platform/mojo/heap_mojo_receiver.h"
++#include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
++
++namespace blink {
++
++class BaseAudioContext;
++class ExceptionState;
++class TempoSessionOptions;
++class TempoSessionState;
++
++class TempoSession final : public EventTarget,
++                           public ExecutionContextLifecycleObserver,
++                           public mojom::blink::TempoSessionClient {
++  DEFINE_WRAPPERTYPEINFO();
++
++ public:
++  TempoSession(ExecutionContext* context, const TempoSessionOptions* options);
++  ~TempoSession() override;
++
++  mojo::PendingRemote<mojom::blink::TempoSessionClient> BindNewPipeAndPassRemote();
++  void BindRemote(mojo::PendingRemote<mojom::blink::TempoSession> remote);
++
++  // WebIDL
++  uint32_t numPeers() const { return num_peers_; }
++  double quantum() const { return quantum_; }
++
++  TempoSessionState* captureState(ExceptionState& exception_state);
++  TempoSessionState* captureState(BaseAudioContext* context, ExceptionState& exception_state);
++  void commitState(TempoSessionState* state, ExceptionState& exception_state);
++  void close();
++
++  DEFINE_ATTRIBUTE_EVENT_LISTENER(numpeerschange, kNumpeerschange)
++  DEFINE_ATTRIBUTE_EVENT_LISTENER(tempochange, kTempochange)
++  DEFINE_ATTRIBUTE_EVENT_LISTENER(playingchange, kPlayingchange)
++
++  // EventTarget
++  const AtomicString& InterfaceName() const override;
++  ExecutionContext* GetExecutionContext() const override;
++
++  // mojom::blink::TempoSessionClient
++  void OnTimelineChanged(mojom::blink::TimelinePtr timeline) override;
++  void OnStartStopChanged(mojom::blink::StartStopStatePtr state) override;
++  void OnNumPeersChanged(uint32_t num_peers) override;
++
++  // ExecutionContextLifecycleObserver
++  void ContextDestroyed() override;
++
++  void Trace(Visitor* visitor) const override;
++
++ private:
++  HeapMojoRemote<mojom::blink::TempoSession> remote_;
++  HeapMojoReceiver<mojom::blink::TempoSessionClient, TempoSession> receiver_;
++
++  uint32_t num_peers_ = 0;
++  double quantum_ = 4.0;
++
++  mojom::blink::TimelinePtr latest_timeline_;
++  mojom::blink::StartStopStatePtr latest_start_stop_;
++};
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_H_
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session.idl b/third_party/blink/renderer/modules/tempo_sync/tempo_session.idl
+new file mode 100644
+index 0000000000000..5fdb853466dbd
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session.idl
+@@ -0,0 +1,7 @@
++[Exposed=Window, SecureContext, RuntimeEnabled=TempoSync] interface TempoSession : EventTarget {
++  readonly attribute unsigned long numPeers; readonly attribute double quantum;
++  [RaisesException] TempoSessionState captureState(optional BaseAudioContext context);
++  [RaisesException] undefined commitState(TempoSessionState state);
++  undefined close();
++  attribute EventHandler onnumpeerschange; attribute EventHandler ontempochange; attribute EventHandler onplayingchange;
++};
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session_options.idl b/third_party/blink/renderer/modules/tempo_sync/tempo_session_options.idl
+new file mode 100644
+index 0000000000000..4c56756b306dc
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session_options.idl
+@@ -0,0 +1 @@
++dictionary TempoSessionOptions { double quantum = 4; boolean startStopSync = false; };
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.cc b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.cc
+new file mode 100644
+index 0000000000000..5a3d55e66d4fc
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.cc
+@@ -0,0 +1,140 @@
++#include "third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h"
++
++#include <cmath>
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/core/timing/dom_window_performance.h"
++#include "third_party/blink/renderer/core/timing/window_performance.h"
++#include "third_party/blink/renderer/platform/bindings/exception_state.h"
++
++namespace blink {
++
++TempoSessionState::TempoSessionState(mojom::blink::TimelinePtr timeline,
++                                     mojom::blink::StartStopStatePtr start_stop,
++                                     base::TimeTicks host_time_origin,
++                                     double local_time_origin, double session_quantum)
++    : timeline_(std::move(timeline)),
++      start_stop_(std::move(start_stop)),
++      host_time_origin_(host_time_origin),
++      local_time_origin_(local_time_origin),
++      session_quantum_(session_quantum) {}
++
++double TempoSessionState::tempo() const {
++  return timeline_->tempo_bpm;
++}
++
++void TempoSessionState::setTempo(double bpm, double atTime) {
++  // To change tempo at atTime, we shift the time_origin and beat_origin
++  // to be exactly at atTime, then update the tempo.
++  base::TimeTicks host_time = LocalToHostTime(atTime);
++  double current_beat = BeatAtHostTime(host_time);
++
++  timeline_->tempo_bpm = bpm;
++  timeline_->time_origin = host_time;
++  timeline_->beat_origin = current_beat;
++}
++
++double TempoSessionState::beatAtTime(double time, double quantum) {
++  // quantum is unused for just calculating the beat, but it's part of the API.
++  return beatAtTime(time);
++}
++
++double TempoSessionState::beatAtTime(double time) {
++  return BeatAtHostTime(LocalToHostTime(time));
++}
++
++double TempoSessionState::phaseAtTime(double time, double quantum) {
++  double beat = beatAtTime(time);
++  if (quantum <= 0) return 0;
++  double phase = fmod(beat, quantum);
++  if (phase < 0) phase += quantum;
++  return phase;
++}
++
++double TempoSessionState::phaseAtTime(double time) {
++  return phaseAtTime(time, session_quantum_); // We will route the default quantum from TempoSession
++}
++
++double TempoSessionState::timeAtBeat(double beat, double quantum) {
++  return timeAtBeat(beat);
++}
++
++double TempoSessionState::timeAtBeat(double beat) {
++  return HostToLocalTime(HostTimeAtBeat(beat));
++}
++
++void TempoSessionState::requestBeatAtTime(double beat, double time, double quantum) {
++  // Preserve phase relative to the quantum by shifting the timeline so that
++  // the requested beat lands at the requested time rounded to the nearest phase-equivalent beat.
++  base::TimeTicks host_time = LocalToHostTime(time);
++  double current_beat_at_time = BeatAtHostTime(host_time);
++  
++  if (quantum > 0) {
++    double beat_diff = beat - current_beat_at_time;
++    double quantum_shifts = round(beat_diff / quantum);
++    double target_beat = current_beat_at_time + quantum_shifts * quantum;
++    
++    // Now we want target_beat to happen at host_time.
++    timeline_->beat_origin = target_beat;
++    timeline_->time_origin = host_time;
++  } else {
++    forceBeatAtTime(beat, time);
++  }
++}
++
++void TempoSessionState::requestBeatAtTime(double beat, double time) {
++  requestBeatAtTime(beat, time, session_quantum_);
++}
++
++void TempoSessionState::forceBeatAtTime(double beat, double time, double quantum) {
++  forceBeatAtTime(beat, time);
++}
++
++void TempoSessionState::forceBeatAtTime(double beat, double time) {
++  timeline_->beat_origin = beat;
++  timeline_->time_origin = LocalToHostTime(time);
++}
++
++bool TempoSessionState::isPlaying() const {
++  return start_stop_->is_playing;
++}
++
++double TempoSessionState::timeForIsPlaying() const {
++  return HostToLocalTime(start_stop_->time);
++}
++
++void TempoSessionState::setIsPlaying(bool playing, double atTime) {
++  base::TimeTicks host_time = LocalToHostTime(atTime);
++  start_stop_->is_playing = playing;
++  start_stop_->time = host_time;
++  start_stop_->beat = BeatAtHostTime(host_time);
++}
++
++mojom::blink::TimelinePtr TempoSessionState::CloneTimeline() const {
++  return timeline_->Clone();
++}
++
++mojom::blink::StartStopStatePtr TempoSessionState::CloneStartStop() const {
++  return start_stop_->Clone();
++}
++
++base::TimeTicks TempoSessionState::LocalToHostTime(double local_time) const {
++  return host_time_origin_ + base::Seconds(local_time - local_time_origin_);
++}
++
++double TempoSessionState::HostToLocalTime(base::TimeTicks host_time) const {
++  return local_time_origin_ + (host_time - host_time_origin_).InSecondsF();
++}
++
++double TempoSessionState::BeatAtHostTime(base::TimeTicks host_time) const {
++  double elapsed_seconds = (host_time - timeline_->time_origin).InSecondsF();
++  double beats_per_second = timeline_->tempo_bpm / 60.0;
++  return timeline_->beat_origin + elapsed_seconds * beats_per_second;
++}
++
++base::TimeTicks TempoSessionState::HostTimeAtBeat(double beat) const {
++  double beats_per_second = timeline_->tempo_bpm / 60.0;
++  double elapsed_seconds = (beat - timeline_->beat_origin) / beats_per_second;
++  return timeline_->time_origin + base::Seconds(elapsed_seconds);
++}
++
++}  // namespace blink
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h
+new file mode 100644
+index 0000000000000..54458f66baa92
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h
+@@ -0,0 +1,62 @@
++#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_STATE_H_
++#define THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_STATE_H_
++
++#include "third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom-blink.h"
++#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
++
++namespace blink {
++
++class ExceptionState;
++
++class TempoSessionState final : public ScriptWrappable {
++  DEFINE_WRAPPERTYPEINFO();
++
++ public:
++  TempoSessionState(mojom::blink::TimelinePtr timeline,
++                    mojom::blink::StartStopStatePtr start_stop,
++                    base::TimeTicks host_time_origin,
++                    double local_time_origin, double session_quantum);
++
++  // WebIDL
++  double tempo() const;
++  void setTempo(double bpm, double atTime);
++
++  double beatAtTime(double time, double quantum);
++  double beatAtTime(double time);
++
++  double phaseAtTime(double time, double quantum);
++  double phaseAtTime(double time);
++
++  double timeAtBeat(double beat, double quantum);
++  double timeAtBeat(double beat);
++
++  void requestBeatAtTime(double beat, double time, double quantum);
++  void requestBeatAtTime(double beat, double time);
++
++  void forceBeatAtTime(double beat, double time, double quantum);
++  void forceBeatAtTime(double beat, double time);
++
++  bool isPlaying() const;
++  double timeForIsPlaying() const;
++  void setIsPlaying(bool playing, double atTime);
++
++  // Internal
++  mojom::blink::TimelinePtr CloneTimeline() const;
++  mojom::blink::StartStopStatePtr CloneStartStop() const;
++
++ private:
++  base::TimeTicks LocalToHostTime(double local_time) const;
++  double HostToLocalTime(base::TimeTicks host_time) const;
++  double BeatAtHostTime(base::TimeTicks host_time) const;
++  base::TimeTicks HostTimeAtBeat(double beat) const;
++
++  mojom::blink::TimelinePtr timeline_;
++  mojom::blink::StartStopStatePtr start_stop_;
++  base::TimeTicks host_time_origin_;
++  double local_time_origin_;
++  double session_quantum_;
++};
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_STATE_H_
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.idl b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.idl
+new file mode 100644
+index 0000000000000..c6798030ceb32
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.idl
+@@ -0,0 +1,6 @@
++[Exposed=Window, SecureContext, RuntimeEnabled=TempoSync] interface TempoSessionState {
++  readonly attribute double tempo; undefined setTempo(double bpm, double atTime);
++  double beatAtTime(double time, optional double quantum); double phaseAtTime(double time, optional double quantum); double timeAtBeat(double beat, optional double quantum);
++  undefined requestBeatAtTime(double beat, double time, optional double quantum); undefined forceBeatAtTime(double beat, double time, optional double quantum);
++  readonly attribute boolean isPlaying; readonly attribute double timeForIsPlaying; undefined setIsPlaying(boolean playing, double atTime);
++};
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_sync.cc b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.cc
+new file mode 100644
+index 0000000000000..d43bf7e721381
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.cc
+@@ -0,0 +1,89 @@
++#include "third_party/blink/renderer/modules/tempo_sync/tempo_sync.h"
++
++#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
++#include "third_party/blink/renderer/bindings/modules/v8/v8_tempo_session_options.h"
++#include "third_party/blink/renderer/core/frame/local_dom_window.h"
++#include "third_party/blink/renderer/core/frame/navigator.h"
++#include "third_party/blink/renderer/modules/tempo_sync/tempo_session.h"
++#include "third_party/blink/renderer/core/dom/dom_exception.h"
++#include "third_party/blink/renderer/platform/wtf/functional.h"
++#include "third_party/blink/renderer/platform/bindings/exception_state.h"
++
++namespace blink {
++
++TempoSync::TempoSync(Navigator* navigator)
++    : ExecutionContextLifecycleObserver(navigator->DomWindow()),
++      service_(navigator->DomWindow()) {}
++
++ScriptPromise<TempoSession> TempoSync::requestSession(
++    ScriptState* script_state,
++    const TempoSessionOptions* options,
++    ExceptionState& exception_state) {
++  if (!GetExecutionContext()) {
++    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
++                                      "Context is detached.");
++    return EmptyPromise();
++  }
++
++  if (!service_.is_bound()) {
++    GetExecutionContext()->GetBrowserInterfaceBroker().GetInterface(
++        service_.BindNewPipeAndPassReceiver(
++            GetExecutionContext()->GetTaskRunner(TaskType::kMiscPlatformAPI)));
++  }
++
++  auto* resolver = MakeGarbageCollected<ScriptPromiseResolver<TempoSession>>(
++      script_state, exception_state.GetContext());
++  auto promise = resolver->Promise();
++
++  auto mojom_options = mojom::blink::TempoSessionOptions::New();
++  mojom_options->quantum = options->quantum();
++  mojom_options->start_stop_sync = options->startStopSync();
++
++  auto* session = MakeGarbageCollected<TempoSession>(GetExecutionContext(), options);
++  auto client = session->BindNewPipeAndPassRemote();
++
++  service_->RequestSession(
++      std::move(mojom_options), std::move(client),
++      BindOnce(&TempoSync::OnSessionRequested, WrapPersistent(this),
++                    WrapPersistent(resolver), WrapPersistent(session)));
++
++  return promise;
++}
++
++void TempoSync::OnSessionRequested(
++    ScriptPromiseResolver<TempoSession>* resolver,
++    TempoSession* session,
++    mojo::PendingRemote<mojom::blink::TempoSession> session_remote,
++    mojom::blink::TimelinePtr timeline,
++    mojom::blink::StartStopStatePtr start_stop,
++    uint32_t num_peers,
++    const String& error_message) {
++  if (!resolver->GetExecutionContext() ||
++      resolver->GetExecutionContext()->IsContextDestroyed()) {
++    return;
++  }
++
++  if (!session_remote) {
++    resolver->Reject(MakeGarbageCollected<DOMException>(
++        DOMExceptionCode::kNotSupportedError, error_message));
++    return;
++  }
++
++  session->BindRemote(std::move(session_remote));
++  if (timeline) session->OnTimelineChanged(std::move(timeline));
++  if (start_stop) session->OnStartStopChanged(std::move(start_stop));
++  session->OnNumPeersChanged(num_peers);
++  resolver->Resolve(session);
++}
++
++void TempoSync::ContextDestroyed() {
++  service_.reset();
++}
++
++void TempoSync::Trace(Visitor* visitor) const {
++  visitor->Trace(service_);
++  ExecutionContextLifecycleObserver::Trace(visitor);
++  ScriptWrappable::Trace(visitor);
++}
++
++}  // namespace blink
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_sync.h b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.h
+new file mode 100644
+index 0000000000000..e5d1705e1d8f2
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.h
+@@ -0,0 +1,51 @@
++#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SYNC_H_
++#define THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SYNC_H_
++
++#include "third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom-blink.h"
++#include "third_party/blink/renderer/bindings/core/v8/script_promise.h"
++#include "third_party/blink/renderer/bindings/core/v8/script_promise_resolver.h"
++#include "third_party/blink/renderer/core/execution_context/execution_context_lifecycle_observer.h"
++#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
++#include "third_party/blink/renderer/platform/mojo/heap_mojo_remote.h"
++#include "third_party/blink/renderer/platform/wtf/text/wtf_string.h"
++
++namespace blink {
++
++class ExceptionState;
++class Navigator;
++class ScriptState;
++class TempoSession;
++class TempoSessionOptions;
++
++class TempoSync final : public ScriptWrappable,
++                        public ExecutionContextLifecycleObserver {
++  DEFINE_WRAPPERTYPEINFO();
++
++ public:
++  explicit TempoSync(Navigator* navigator);
++
++  // WebIDL
++  ScriptPromise<TempoSession> requestSession(ScriptState* script_state,
++                                             const TempoSessionOptions* options,
++                                             ExceptionState& exception_state);
++
++  void Trace(Visitor* visitor) const override;
++
++  // ExecutionContextLifecycleObserver
++  void ContextDestroyed() override;
++
++ private:
++  void OnSessionRequested(ScriptPromiseResolver<TempoSession>* resolver,
++                          TempoSession* session,
++                          mojo::PendingRemote<mojom::blink::TempoSession> session_remote,
++                          mojom::blink::TimelinePtr timeline,
++                          mojom::blink::StartStopStatePtr start_stop,
++                          uint32_t num_peers,
++                          const String& error_message);
++
++  HeapMojoRemote<mojom::blink::TempoSyncService> service_;
++};
++
++}  // namespace blink
++
++#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SYNC_H_
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_sync.idl b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.idl
+new file mode 100644
+index 0000000000000..234dae262c4e0
+--- /dev/null
++++ b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.idl
+@@ -0,0 +1 @@
++[Exposed=Window, SecureContext, RuntimeEnabled=TempoSync] interface TempoSync { [CallWith=ScriptState, RaisesException] Promise<TempoSession> requestSession(optional TempoSessionOptions options = {}); };
+\ No newline at end of file
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/third_party/blink/renderer/modules/webaudio/audio_context.cc
+index 1b7598ba4364f..e8cb85a441bfb 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_context.cc
++++ b/third_party/blink/renderer/modules/webaudio/audio_context.cc
+@@ -2457,4 +2457,10 @@ void AudioContext::RejectPendingResumeResolversWithException(
+   }
+ }
+ 
++
++std::pair<double, base::TimeTicks> AudioContext::GetOutputPositionForTempoSync() const {
++  DeferredTaskHandler::GraphAutoLocker locker(GetDeferredTaskHandler());
++  return {output_position_.position, base::TimeTicks() + base::Seconds(output_position_.timestamp)};
++}
++
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.h b/third_party/blink/renderer/modules/webaudio/audio_context.h
+index 5548c84d187c6..06d50d14181fb 100644
+--- a/third_party/blink/renderer/modules/webaudio/audio_context.h
++++ b/third_party/blink/renderer/modules/webaudio/audio_context.h
+@@ -224,6 +224,7 @@ class MODULES_EXPORT AudioContext final
+   DEFINE_ATTRIBUTE_EVENT_LISTENER(sinkchange, kSinkchange)
+   DEFINE_ATTRIBUTE_EVENT_LISTENER(error, kError)
+   AudioTimestamp* getOutputTimestamp(ScriptState*) const;
++  std::pair<double, base::TimeTicks> GetOutputPositionForTempoSync() const;
+   ScriptPromise<IDLUndefined> resumeContext(ScriptState*, ExceptionState&);
+   ScriptPromise<IDLUndefined> suspendContext(ScriptState*, ExceptionState&);
+   ScriptPromise<IDLUndefined> closeContext(ScriptState*, ExceptionState&);
+diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+index bc09fbe794c05..b6e099fc41692 100644
+--- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
++++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
+@@ -7359,6 +7359,10 @@
+ 
+     // WebBluetooth is enabled by default on Android, ChromeOS, iOS, macOS and
+     // Windows.
++    {
++      name: "TempoSync",
++      status: "experimental",
++    },
+     {
+       name: "WebBluetooth",
+       public: true,
+diff --git a/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-manual.html b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-manual.html
+new file mode 100644
+index 0000000000000..16749ff654b0f
+--- /dev/null
++++ b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-manual.html
+@@ -0,0 +1,58 @@
++<!DOCTYPE html>
++<html>
++<head>
++<title>TempoSync Manual Test</title>
++</head>
++<body>
++<h1>TempoSync Manual Test</h1>
++<button id="requestBtn">Request Session</button>
++<button id="commitTempoBtn" disabled>Commit Tempo 100</button>
++<div id="output"></div>
++<script>
++let session = null;
++let af = null;
++
++document.getElementById('requestBtn').addEventListener('click', async () => {
++  try {
++    session = await navigator.tempoSync.requestSession({ quantum: 4, startStopSync: true });
++    document.getElementById('commitTempoBtn').disabled = false;
++    
++    session.ontempochange = () => console.log('Tempo changed');
++    session.onplayingchange = () => console.log('Playing changed');
++    session.onnumpeerschange = () => console.log('Num peers:', session.numPeers);
++    
++    if (!af) {
++      af = requestAnimationFrame(update);
++    }
++  } catch (e) {
++    console.error(e);
++  }
++});
++
++document.getElementById('commitTempoBtn').addEventListener('click', () => {
++  if (!session) return;
++  const state = session.captureState();
++  state.setTempo(100, performance.now() / 1000);
++  session.commitState(state);
++});
++
++function update() {
++  if (session) {
++    const state = session.captureState();
++    const time = performance.now() / 1000;
++    const tempo = state.tempo;
++    const beat = state.beatAtTime(time);
++    const phase = state.phaseAtTime(time);
++    
++    document.getElementById('output').innerHTML = `
++      Tempo: ${tempo.toFixed(2)} bpm<br>
++      Beat: ${beat.toFixed(2)}<br>
++      Phase: ${phase.toFixed(2)}<br>
++      Playing: ${state.isPlaying}<br>
++    `;
++  }
++  af = requestAnimationFrame(update);
++}
++</script>
++<script>document.getElementById("requestBtn").click();</script></body>
++</html>
+\ No newline at end of file
+diff --git a/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-peers-manual.html b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-peers-manual.html
+new file mode 100644
+index 0000000000000..92fbce67677f9
+--- /dev/null
++++ b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-peers-manual.html
+@@ -0,0 +1,32 @@
++<!DOCTYPE html>
++<html><head><meta charset="utf-8"><title>Tempo Sync peers harness</title></head>
++<body><pre id="log"></pre>
++<script>
++const logEl = document.getElementById('log');
++function log(msg) {
++  logEl.textContent += msg + '\n';
++}
++(async () => {
++  try {
++    log('start typeof navigator.tempoSync=' + typeof navigator.tempoSync);
++    const session = await navigator.tempoSync.requestSession({ quantum: 4 });
++    log('session acquired peers=' + session.numPeers);
++    session.addEventListener('numpeerschange', () => log('event numpeerschange peers=' + session.numPeers));
++    session.addEventListener('tempochange', () => log('event tempochange tempo=' + session.captureState().tempo));
++    const ctx = new AudioContext();
++    setInterval(() => {
++      const s = session.captureState();
++      const t = performance.now() / 1000;
++      log(`t=${t.toFixed(2)} peers=${session.numPeers} tempo=${s.tempo.toFixed(3)} beat=${s.beatAtTime(t).toFixed(3)} phase=${s.phaseAtTime(t).toFixed(3)} playing=${s.isPlaying}`);
++    }, 500);
++    setTimeout(() => {
++      const s = session.captureState();
++      s.setTempo(95, performance.now() / 1000);
++      session.commitState(s);
++      log('committed tempo 95');
++    }, 8000);
++  } catch (e) {
++    log('ERROR ' + e);
++  }
++})();
++</script></body></html>
+diff --git a/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session.html b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session.html
+new file mode 100644
+index 0000000000000..01569274245fc
+--- /dev/null
++++ b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session.html
+@@ -0,0 +1,22 @@
++<!DOCTYPE html>
++<script src="/resources/testharness.js"></script>
++<script src="/resources/testharnessreport.js"></script>
++<script>
++promise_test(async t => {
++  assert_true('tempoSync' in navigator, 'navigator.tempoSync exists');
++  
++  const session = await navigator.tempoSync.requestSession();
++  assert_equals(session.quantum, 4, 'default quantum is 4');
++  assert_equals(session.numPeers, 0, 'initial numPeers is 0');
++  
++  const state = session.captureState();
++  assert_true(state !== null, 'captureState returns a state');
++  
++  assert_equals(state.tempo, 120, 'fake engine initial tempo is 120');
++  assert_equals(state.isPlaying, true, 'fake engine initial isPlaying is true');
++  
++  const time = performance.now() / 1000;
++  const beat = state.beatAtTime(time);
++  assert_true(typeof beat === 'number' && !isNaN(beat), 'beatAtTime returns a number');
++}, 'TempoSync API surface and basic captureState from fake engine');
++</script>
+\ No newline at end of file
+diff --git a/third_party/tempo_sync_core/BUILD.gn b/third_party/tempo_sync_core/BUILD.gn
+new file mode 100644
+index 0000000000000..e08bcc0a198ff
+--- /dev/null
++++ b/third_party/tempo_sync_core/BUILD.gn
+@@ -0,0 +1,19 @@
++import("//build/rust/rust_static_library.gni")
++
++rust_static_library("tempo_sync_core") {
++  crate_name = "tempo_sync_core"
++  configs -= [ "//build/config/compiler:chromium_code" ]
++  configs += [ "//build/config/compiler:no_chromium_code" ]
++  rustflags = [ "-A", "unused_mut", "-A", "unused_variables", "-A", "warnings" ]
++  crate_root = "src/lib.rs"
++  sources = [
++    "src/discovery.rs",
++    "src/engine.rs",
++    "src/lib.rs",
++    "src/measurement.rs",
++    "src/session.rs",
++    "src/time.rs",
++    "src/timeline.rs",
++    "src/wire.rs",
++  ]
++}
+diff --git a/third_party/tempo_sync_core/Cargo.toml b/third_party/tempo_sync_core/Cargo.toml
+new file mode 100644
+index 0000000000000..bc129cecf370a
+--- /dev/null
++++ b/third_party/tempo_sync_core/Cargo.toml
+@@ -0,0 +1,6 @@
++[package]
++name = "tempo-sync-core"
++version = "0.1.0"
++edition = "2021"
++
++[dependencies]
+diff --git a/third_party/tempo_sync_core/README.chromium b/third_party/tempo_sync_core/README.chromium
+new file mode 100644
+index 0000000000000..ba4c30bcc2e1a
+--- /dev/null
++++ b/third_party/tempo_sync_core/README.chromium
+@@ -0,0 +1,10 @@
++Name: Web Tempo Sync Core Engine
++Short Name: tempo_sync_core
++URL: https://example.com/
++Version: 0.1.0
++License: Apache-2.0
++License File: NOT_SHIPPED
++Security Critical: yes
++Shipped: yes
++Description:
++Rust core engine for Web Tempo Sync prototype.
+diff --git a/third_party/tempo_sync_core/src/discovery.rs b/third_party/tempo_sync_core/src/discovery.rs
+new file mode 100644
+index 0000000000000..5316940b46f8b
+--- /dev/null
++++ b/third_party/tempo_sync_core/src/discovery.rs
+@@ -0,0 +1,2 @@
++// SPDX-License-Identifier: Apache-2.0
++// Discovery logic will be handled inside Engine, or we can just put it there.
+diff --git a/third_party/tempo_sync_core/src/engine.rs b/third_party/tempo_sync_core/src/engine.rs
+new file mode 100644
+index 0000000000000..6e0a69388599f
+--- /dev/null
++++ b/third_party/tempo_sync_core/src/engine.rs
+@@ -0,0 +1,555 @@
++// SPDX-License-Identifier: Apache-2.0
++
++use std::collections::HashMap;
++use crate::time::HostTime;
++use crate::timeline::{SessionState, Timeline, StartStopState};
++use crate::wire::{Message, DiscoveryMsg, MeasurementMsg, NodeId, serialize_discovery_alive, serialize_discovery_byebye, serialize_measurement_ping, serialize_measurement_pong};
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub struct InterfaceId(pub u32);
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++
++#[derive(Default)]
++pub struct SocketAddrPlain {
++    pub ip: [u8; 4],
++    pub port: u16,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub enum IoErrorKind {
++    JoinMulticastFailed,
++    OpenUnicastFailed,
++    SendFailed,
++}
++
++#[derive(Debug, Clone, PartialEq)]
++pub enum Output {
++    Send {
++        iface_id: InterfaceId,
++        to: SocketAddrPlain,
++        bytes: std::vec::Vec<u8>,
++    },
++    JoinMulticast {
++        iface_id: InterfaceId,
++        group: [u8; 4],
++        port: u16,
++    },
++    LeaveMulticast,
++    OpenUnicast {
++        iface_id: InterfaceId,
++    },
++    SetTimer {
++        at: HostTime,
++    },
++    StateChanged {
++        state: SessionState,
++    },
++    NumPeersChanged(u32),
++}
++
++pub struct PeerState {
++    pub session_id: Option<NodeId>,
++    pub timeline_ghost: Option<Timeline>,
++    pub start_stop_ghost: Option<StartStopState>,
++    pub last_seen: HostTime,
++    pub addr: SocketAddrPlain,
++    
++    pub offsets: Vec<i64>, // Up to 100 samples
++    pub next_ping_time: HostTime,
++    pub ping_timeouts: u32,
++    pub measuring: bool,
++}
++
++impl PeerState {
++    pub fn new(addr: SocketAddrPlain, now: HostTime) -> Self {
++        Self {
++            session_id: None,
++            timeline_ghost: None,
++            start_stop_ghost: None,
++            last_seen: now,
++            addr,
++            offsets: Vec::new(),
++            next_ping_time: now,
++            ping_timeouts: 0,
++            measuring: true,
++        }
++    }
++    
++    pub fn median_offset(&self) -> i64 {
++        if self.offsets.is_empty() { return 0; }
++        let mut sorted = self.offsets.clone();
++        sorted.sort_unstable();
++        sorted[sorted.len() / 2]
++    }
++}
++
++pub struct Engine {
++    pub node_id: NodeId,
++    pub enabled: bool,
++    pub session_id: NodeId,
++    pub session_offset: i64,
++    pub state: SessionState, // In HostTime
++    
++    pub interfaces: HashMap<InterfaceId, SocketAddrPlain>,
++    pub peers: HashMap<NodeId, PeerState>,
++    pub dump_packets: bool,
++    pub num_session_peers: u32,
++    
++    pub next_broadcast: HostTime,
++}
++
++impl Engine {
++    pub fn new(node_id: NodeId) -> Self {
++        Engine {
++            node_id,
++            enabled: false,
++            session_id: node_id,
++            session_offset: 0,
++            state: SessionState::default(),
++            interfaces: HashMap::new(),
++            peers: HashMap::new(),
++            num_session_peers: 0,
++            next_broadcast: HostTime(0),
++            dump_packets: false,
++        }
++    }
++
++    fn produce_outputs(&mut self, now: HostTime, outputs: &mut Vec<Output>) {
++        if !self.enabled { return; }
++        
++        let mut next_timer = HostTime(i64::MAX);
++
++        // Discovery broadcast
++        if now.0 >= self.next_broadcast.0 {
++            // Serialize in Ghost Time
++            let mut ghost_tl = self.state.timeline.clone();
++            ghost_tl.time_origin = HostTime(ghost_tl.time_origin.0.wrapping_add(self.session_offset));
++            let mut ghost_ss = self.state.start_stop.clone();
++            ghost_ss.time = HostTime(ghost_ss.time.0.wrapping_add(self.session_offset));
++
++            for (&iface_id, mep4) in &self.interfaces {
++                let msg = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss, Some(*mep4), false);
++                if self.dump_packets { eprintln!("SEND MULTICAST ALIVE: {:x?}", msg); }
++                outputs.push(Output::Send {
++                    iface_id,
++                    to: SocketAddrPlain { ip: [224, 76, 78, 75], port: 20808 },
++                    bytes: msg,
++                });
++            }
++            // "A hard floor of 50ms is enforced... nominal interval is 250ms"
++            self.next_broadcast = HostTime(now.0 + 250_000); 
++        }
++        if self.next_broadcast.0 < next_timer.0 {
++            next_timer = self.next_broadcast;
++        }
++
++        // Pings
++        for (_peer_id, peer) in self.peers.iter_mut() {
++            if peer.measuring && now.0 >= peer.next_ping_time.0 {
++                if peer.ping_timeouts >= 5 {
++                    peer.measuring = false;
++                    continue;
++                }
++                peer.ping_timeouts += 1;
++                
++                let ping = serialize_measurement_ping(now, None);
++                if self.dump_packets { eprintln!("SEND PING (INIT): {:x?}", ping); }
++                for &iface_id in self.interfaces.keys() {
++                    outputs.push(Output::Send {
++                        iface_id,
++                        to: peer.addr,
++                        bytes: ping.clone(),
++                    });
++                }
++                peer.next_ping_time = HostTime(now.0 + 50_000); // 50ms timeout
++            }
++            if peer.measuring && peer.next_ping_time.0 < next_timer.0 {
++                next_timer = peer.next_ping_time;
++            }
++        }
++        
++        // Peer timeouts (6s)
++        let timeout = HostTime(now.0 - 6_000_000);
++        let old_len = self.peers.len();
++        self.peers.retain(|_, p| p.last_seen.0 >= timeout.0);
++        if self.peers.len() != old_len {
++            self.resolve_session(now, outputs);
++        }
++        
++        // Wakeup for next timeout
++        let mut min_last_seen = HostTime(i64::MAX);
++        for peer in self.peers.values() {
++            if peer.last_seen.0 < min_last_seen.0 {
++                min_last_seen = peer.last_seen;
++            }
++        }
++        if min_last_seen.0 != i64::MAX {
++            let next_timeout = HostTime(min_last_seen.0 + 6_000_000);
++            if next_timeout.0 < next_timer.0 {
++                next_timer = next_timeout;
++            }
++        }
++
++        if next_timer.0 != i64::MAX {
++            outputs.push(Output::SetTimer { at: next_timer });
++        }
++        
++        let mut session_peers = 0;
++        for peer in self.peers.values() {
++            if peer.session_id == Some(self.session_id) {
++                session_peers += 1;
++            }
++        }
++        if session_peers != self.num_session_peers {
++            self.num_session_peers = session_peers;
++            outputs.push(Output::NumPeersChanged(session_peers));
++        }
++    }
++
++    pub fn handle_packet(&mut self, iface_id: InterfaceId, from: SocketAddrPlain, bytes: &[u8], now: HostTime) -> Vec<Output> {
++        let mut outputs = Vec::new();
++        if !self.enabled { return outputs; }
++        if self.dump_packets { eprintln!("RECV MSG: {:x?}", bytes); }
++        if let Some(msg) = crate::wire::parse_message(bytes) {
++            match msg {
++                Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id, mep4 }) => {
++                    if node_id == self.node_id { return outputs; } // Ignore self
++                    
++                    let is_new = !self.peers.contains_key(&node_id);
++                    let mut needs_resolution = false;
++
++                    let peer = self.peers.entry(node_id).or_insert_with(|| PeerState::new(from, now));
++                    peer.last_seen = now;
++                    peer.addr = mep4.unwrap_or(from);
++
++                    let session_changed = peer.session_id != session_id;
++                    if session_changed {
++                        peer.offsets.clear();
++                        peer.measuring = true;
++                        peer.ping_timeouts = 0;
++                        peer.next_ping_time = now;
++                    }
++
++                    if peer.timeline_ghost != timeline || peer.start_stop_ghost != start_stop || session_changed {
++                        peer.timeline_ghost = timeline;
++                        peer.start_stop_ghost = start_stop;
++                        peer.session_id = session_id;
++                        needs_resolution = !peer.offsets.is_empty();
++                        
++                        // Send Response
++                        let mut ghost_tl = self.state.timeline.clone();
++                        ghost_tl.time_origin = HostTime(ghost_tl.time_origin.0.wrapping_add(self.session_offset));
++                        let mut ghost_ss = self.state.start_stop.clone();
++                        ghost_ss.time = HostTime(ghost_ss.time.0.wrapping_add(self.session_offset));
++                        let mep4 = self.interfaces.get(&iface_id).copied();
++                        let resp = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss, mep4, true);
++                        if self.dump_packets { eprintln!("SEND RESPONSE ALIVE: {:x?}", resp); }
++                        outputs.push(Output::Send {
++                            iface_id,
++                            to: peer.addr,
++                            bytes: resp,
++                        });
++                    }
++                    
++                    if is_new {
++                    }
++                    if needs_resolution {
++                        self.resolve_session(now, &mut outputs);
++                    }
++                }
++                Message::Discovery(DiscoveryMsg::ByeBye { node_id }) => {
++                    if self.peers.remove(&node_id).is_some() {
++                        self.resolve_session(now, &mut outputs);
++                    }
++                }
++                Message::Measurement(MeasurementMsg::Ping { host_time: _, prev_ghost_time: _ }) => {
++                    // Pong: `__gt` is our GhostTime
++                    let our_ghost_time = HostTime(now.0.wrapping_add(self.session_offset));
++                    let pong = serialize_measurement_pong(&self.session_id, our_ghost_time, &bytes[9..]);
++                    if self.dump_packets { eprintln!("SEND PONG: {:x?}", pong); }
++                    outputs.push(Output::Send {
++                        iface_id,
++                        to: from,
++                        bytes: pong,
++                    });
++                }
++                Message::Measurement(MeasurementMsg::Pong { session_id, ghost_time: b_t2, ping_host_time: a_t2, ping_prev_ghost_time: prev_ghost_time }) => {
++                    {
++                        let a_t3 = now;
++                        let offset = if let Some(b_t1) = prev_ghost_time {
++                            let off1 = b_t2.0.wrapping_sub((a_t3.0.wrapping_add(a_t2.0)) / 2);
++                            let off2 = (b_t2.0.wrapping_add(b_t1.0)) / 2 - a_t2.0;
++                            (off1 + off2) / 2
++                        } else {
++                            b_t2.0.wrapping_sub((a_t3.0.wrapping_add(a_t2.0)) / 2)
++                        };
++                        
++                        let mut found_node_id = None;
++                        for (id, peer) in &self.peers {
++                            if peer.addr == from { found_node_id = Some(*id); break; }
++                        }
++                        
++                        if let Some(id) = found_node_id {
++                            let peer = self.peers.get_mut(&id).unwrap();
++                            if let Some(pong_sess) = session_id {
++                                if peer.session_id != Some(pong_sess) {
++                                    peer.session_id = Some(pong_sess);
++                                    peer.offsets.clear();
++                                }
++                            }
++                            if peer.measuring {
++                                peer.offsets.push(offset);
++                                peer.ping_timeouts = 0;
++                                if peer.offsets.len() >= 20 {
++                                    peer.measuring = false;
++                                } else {
++                                    // Send immediate follow-up
++                                    let ping = serialize_measurement_ping(now, Some(b_t2));
++                                    if self.dump_packets { eprintln!("SEND PING: {:x?}", ping); }
++                                    outputs.push(Output::Send {
++                                        iface_id,
++                                        to: peer.addr,
++                                        bytes: ping,
++                                    });
++                                    peer.next_ping_time = HostTime(now.0 + 50_000);
++                                }
++                                if peer.offsets.len() == 1 || !peer.measuring {
++                                    self.resolve_session(now, &mut outputs);
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++        
++        self.produce_outputs(now, &mut outputs);
++        outputs
++    }
++
++    pub fn handle_timer(&mut self, now: HostTime) -> Vec<Output> {
++        let mut outputs = Vec::new();
++        self.produce_outputs(now, &mut outputs);
++        outputs
++    }
++
++    pub fn commit_app_state(&mut self, mut state: SessionState, now: HostTime) -> Vec<Output> {
++        let mut outputs = Vec::new();
++        if self.state != state {
++            if state.timeline != self.state.timeline {
++                let mut max_bo = self.state.timeline.beat_origin.0;
++                for peer in self.peers.values() {
++                    if peer.session_id == Some(self.session_id) {
++                        if let Some(ref tl) = peer.timeline_ghost {
++                            if tl.beat_origin.0 > max_bo {
++                                max_bo = tl.beat_origin.0;
++                            }
++                        }
++                    }
++                }
++                if state.timeline.beat_origin.0 <= max_bo {
++                    let new_bo = max_bo + 1_000_000;
++                    let delta_mb = new_bo - state.timeline.beat_origin.0;
++                    let delta_us = ((delta_mb as i128 * state.timeline.tempo.0 as i128) / 1_000_000) as i64;
++                    state.timeline.beat_origin = crate::time::MicroBeats(new_bo);
++                    state.timeline.time_origin = HostTime(state.timeline.time_origin.0.wrapping_add(delta_us));
++                }
++            }
++            if state.start_stop != self.state.start_stop {
++                let mut max_ss_ghost = self.state.start_stop.time.0.wrapping_add(self.session_offset);
++                for peer in self.peers.values() {
++                    if peer.session_id == Some(self.session_id) {
++                        if let Some(ref ss) = peer.start_stop_ghost {
++                            if ss.time.0 > max_ss_ghost {
++                                max_ss_ghost = ss.time.0;
++                            }
++                        }
++                    }
++                }
++                let committed_ss_ghost = state.start_stop.time.0.wrapping_add(self.session_offset);
++                if committed_ss_ghost <= max_ss_ghost {
++                    state.start_stop.time = HostTime((max_ss_ghost + 1).wrapping_sub(self.session_offset));
++                }
++            }
++            self.state = state;
++            outputs.push(Output::StateChanged { state: self.state.clone() });
++            
++            if self.enabled {
++                self.next_broadcast = now;
++                self.produce_outputs(now, &mut outputs);
++            }
++        }
++        outputs
++    }
++
++    pub fn set_enabled(&mut self, enabled: bool, now: HostTime) -> Vec<Output> {
++        let mut outputs = Vec::new();
++        if self.enabled != enabled {
++            self.enabled = enabled;
++            if enabled {
++                if self.peers.is_empty() {
++                    self.session_id = self.node_id;
++                    self.session_offset = -now.0;
++                }
++                if self.state.timeline.time_origin.0 == 0 {
++                    self.state.timeline.time_origin = now;
++                    outputs.push(Output::StateChanged { state: self.state.clone() });
++                }
++                self.next_broadcast = now;
++                self.produce_outputs(now, &mut outputs);
++            } else {
++                let msg = serialize_discovery_byebye(&self.node_id);
++                for &iface_id in self.interfaces.keys() {
++                    outputs.push(Output::Send {
++                        iface_id,
++                        to: SocketAddrPlain { ip: [224, 76, 78, 75], port: 20808 },
++                        bytes: msg.clone(),
++                    });
++                }
++                self.peers.clear();
++            }
++        }
++        outputs
++    }
++
++    pub fn add_interface(&mut self, iface_id: InterfaceId, local_addr: SocketAddrPlain) -> Vec<Output> {
++        let outputs = Vec::new();
++        self.interfaces.insert(iface_id, local_addr);
++        // Note: join multicast logic handled outside, engine shouldn't emit OpenUnicast if it already receives the port.
++        outputs
++    }
++
++    pub fn remove_interface(&mut self, iface_id: InterfaceId) -> Vec<Output> {
++        self.interfaces.remove(&iface_id);
++        Vec::new()
++    }
++    
++    pub fn handle_io_error(&mut self, iface_id: InterfaceId, _error: IoErrorKind, _now: HostTime) -> Vec<Output> {
++        self.interfaces.remove(&iface_id);
++        Vec::new()
++    }
++
++    fn resolve_session(&mut self, now: HostTime, outputs: &mut Vec<Output>) {
++        let mut best_session = self.session_id;
++        let mut best_offset = self.session_offset;
++        let mut our_ghost_time = now.0.wrapping_add(self.session_offset);
++        
++        let mut changed = false;
++
++        for (_id, peer) in &self.peers {
++            if peer.offsets.is_empty() {
++                continue;
++            }
++            if let Some(peer_sess) = peer.session_id {
++                let peer_offset = peer.median_offset();
++                let peer_ghost_time = now.0.wrapping_add(peer_offset);
++                
++                if peer_sess == best_session {
++                    if best_session != self.node_id && (best_offset - peer_offset).abs() > 500 {
++                        best_offset = peer_offset;
++                        our_ghost_time = peer_ghost_time;
++                    }
++                    continue;
++                }
++
++                // Compare sessions
++                let diff = peer_ghost_time.wrapping_sub(our_ghost_time);
++                let older = diff > 500_000;
++                let within_eps = diff.abs() <= 500_000;
++                
++                let win = if older {
++                    true
++                } else if within_eps && Self::compare_session_ids(&peer_sess, &best_session) == std::cmp::Ordering::Less {
++                    true // Lexicographically smaller wins
++                } else {
++                    false
++                };
++                
++                if win {
++                    best_session = peer_sess;
++                    best_offset = peer_offset;
++                    our_ghost_time = peer_ghost_time;
++                }
++            }
++        }
++
++        let mut changed_session = false;
++        if best_session != self.session_id {
++            self.session_id = best_session;
++            self.session_offset = best_offset;
++            changed_session = true;
++            changed = true;
++        } else if self.session_offset != best_offset {
++            self.session_offset = best_offset;
++            changed = true;
++        }
++        
++        // Find best timeline in current session
++        let mut best_tl = if changed_session {
++            None
++        } else {
++            let mut tl = self.state.timeline.clone();
++            tl.time_origin = HostTime(tl.time_origin.0.wrapping_add(self.session_offset));
++            Some(tl)
++        };
++        
++        for peer in self.peers.values() {
++            if peer.session_id == Some(self.session_id) {
++                if let Some(ref tl) = peer.timeline_ghost {
++                    match best_tl {
++                        Some(ref b_tl) if tl.beat_origin.0 <= b_tl.beat_origin.0 => {}
++                        _ => best_tl = Some(tl.clone()),
++                    }
++                }
++            }
++        }
++        
++        if let Some(tl) = best_tl {
++            let mut best_tl_host = tl;
++            best_tl_host.time_origin = HostTime(best_tl_host.time_origin.0.wrapping_sub(self.session_offset));
++            if best_tl_host != self.state.timeline {
++                self.state.timeline = best_tl_host;
++                changed = true;
++            }
++        }
++
++        // StartStopState resolution
++        let mut best_ss = if changed_session {
++            None
++        } else {
++            let mut ss = self.state.start_stop.clone();
++            ss.time = HostTime(ss.time.0.wrapping_add(self.session_offset));
++            Some(ss)
++        };
++        
++        for peer in self.peers.values() {
++            if peer.session_id == Some(self.session_id) {
++                if let Some(ref ss) = peer.start_stop_ghost {
++                    match best_ss {
++                        Some(ref b_ss) if ss.time.0 <= b_ss.time.0 => {}
++                        _ => best_ss = Some(ss.clone()),
++                    }
++                }
++            }
++        }
++        
++        if let Some(ss) = best_ss {
++            let mut best_ss_host = ss;
++            best_ss_host.time = HostTime(best_ss_host.time.0.wrapping_sub(self.session_offset));
++            if best_ss_host != self.state.start_stop {
++                self.state.start_stop = best_ss_host;
++                changed = true;
++            }
++        }
++
++        if changed {
++            outputs.push(Output::StateChanged { state: self.state.clone() });
++            self.next_broadcast = now; // Broadcast ASAP
++        }
++    }
++    
++    fn compare_session_ids(a: &NodeId, b: &NodeId) -> std::cmp::Ordering {
++        a.0.cmp(&b.0)
++    }
++}
+diff --git a/third_party/tempo_sync_core/src/lib.rs b/third_party/tempo_sync_core/src/lib.rs
+new file mode 100644
+index 0000000000000..84b94ccb2cb8f
+--- /dev/null
++++ b/third_party/tempo_sync_core/src/lib.rs
+@@ -0,0 +1,15 @@
++// SPDX-License-Identifier: Apache-2.0
++#![forbid(unsafe_code)]
++
++pub mod time;
++pub mod timeline;
++pub mod engine;
++pub mod wire;
++pub mod discovery;
++pub mod measurement;
++pub mod session;
++
++pub use time::{HostTime, Duration, Tempo, Beats};
++pub use timeline::{Timeline, StartStopState, SessionState};
++pub use engine::{Engine, Output, InterfaceId, SocketAddrPlain, IoErrorKind};
++pub use wire::NodeId;
+diff --git a/third_party/tempo_sync_core/src/measurement.rs b/third_party/tempo_sync_core/src/measurement.rs
+new file mode 100644
+index 0000000000000..9452ad90f0730
+--- /dev/null
++++ b/third_party/tempo_sync_core/src/measurement.rs
+@@ -0,0 +1,3 @@
++// SPDX-License-Identifier: Apache-2.0
++// Stub waiting for PROTOCOL.md
++// Will handle delay/offset measurement
+diff --git a/third_party/tempo_sync_core/src/session.rs b/third_party/tempo_sync_core/src/session.rs
+new file mode 100644
+index 0000000000000..14554fd44f941
+--- /dev/null
++++ b/third_party/tempo_sync_core/src/session.rs
+@@ -0,0 +1,3 @@
++// SPDX-License-Identifier: Apache-2.0
++// Stub waiting for PROTOCOL.md
++// Will handle session and cluster consensus
+diff --git a/third_party/tempo_sync_core/src/time.rs b/third_party/tempo_sync_core/src/time.rs
+new file mode 100644
+index 0000000000000..90e0da4ea573b
+--- /dev/null
++++ b/third_party/tempo_sync_core/src/time.rs
+@@ -0,0 +1,49 @@
++// SPDX-License-Identifier: Apache-2.0
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct HostTime(pub i64);
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct Duration(pub i64);
++
++#[derive(Debug, Clone, Copy, PartialEq, PartialOrd)]
++pub struct Tempo(pub f64);
++
++impl Tempo {
++    pub fn micros_per_beat(&self) -> f64 {
++        if self.0 <= 0.0 {
++            return f64::INFINITY;
++        }
++        60_000_000.0 / self.0
++    }
++}
++
++pub type Beats = f64;
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct MicroBeats(pub i64);
++
++impl MicroBeats {
++    pub fn from_beats(beats: Beats) -> Self {
++        Self((beats * 1_000_000.0).round() as i64)
++    }
++    pub fn to_beats(&self) -> Beats {
++        self.0 as f64 / 1_000_000.0
++    }
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
++pub struct TempoWire(pub i64);
++
++impl TempoWire {
++    pub fn from_tempo(tempo: Tempo) -> Self {
++        Self((60_000_000.0 / tempo.0).round() as i64)
++    }
++    pub fn to_tempo(&self) -> Tempo {
++        if self.0 <= 0 {
++            Tempo(f64::INFINITY)
++        } else {
++            Tempo(60_000_000.0 / self.0 as f64)
++        }
++    }
++}
+diff --git a/third_party/tempo_sync_core/src/timeline.rs b/third_party/tempo_sync_core/src/timeline.rs
+new file mode 100644
+index 0000000000000..4861ab6f3d5ee
+--- /dev/null
++++ b/third_party/tempo_sync_core/src/timeline.rs
+@@ -0,0 +1,175 @@
++// SPDX-License-Identifier: Apache-2.0
++
++use crate::time::{HostTime, Tempo, Beats, MicroBeats, TempoWire};
++
++#[derive(Debug, Clone, PartialEq)]
++pub struct Timeline {
++    pub tempo: TempoWire,
++    pub beat_origin: MicroBeats,
++    pub time_origin: HostTime,
++}
++
++#[derive(Debug, Clone, PartialEq)]
++pub struct StartStopState {
++    pub is_playing: bool,
++    pub beat: MicroBeats,
++    pub time: HostTime,
++}
++
++#[derive(Debug, Clone, PartialEq)]
++pub struct SessionState {
++    pub timeline: Timeline,
++    pub start_stop: StartStopState,
++}
++
++impl Default for SessionState {
++    fn default() -> Self {
++        Self {
++            timeline: Timeline {
++                tempo: TempoWire::from_tempo(Tempo(120.0)),
++                beat_origin: MicroBeats(0),
++                time_origin: HostTime(0),
++            },
++            start_stop: StartStopState {
++                is_playing: false,
++                beat: MicroBeats(0),
++                time: HostTime(0),
++            },
++        }
++    }
++}
++
++impl SessionState {
++    pub fn beat_at_time(&self, time: HostTime, _quantum: f64) -> Beats {
++        let dt = time.0.wrapping_sub(self.timeline.time_origin.0) as f64;
++        let dbeats = dt / (self.timeline.tempo.0 as f64);
++        self.timeline.beat_origin.to_beats() + dbeats
++    }
++
++    pub fn phase_at_time(&self, time: HostTime, quantum: f64) -> f64 {
++        let beat = self.beat_at_time(time, quantum);
++        let q = quantum.abs();
++        if q == 0.0 { return 0.0; }
++        let quantum_bins = (beat.abs() + q) / q;
++        let quantum_bins_int = quantum_bins.floor();
++        (beat + quantum_bins_int * q) % q
++    }
++
++    pub fn time_at_beat(&self, beat: Beats, _quantum: f64) -> HostTime {
++        let dbeats = beat - self.timeline.beat_origin.to_beats();
++        let dt = dbeats * (self.timeline.tempo.0 as f64);
++        HostTime(self.timeline.time_origin.0.wrapping_add(dt as i64))
++    }
++
++    pub fn request_beat_at_time(&mut self, time: HostTime, beat: Beats, quantum: f64) {
++        // "If a peer is solo, requestBeatAtTime(beat, time, quantum) forces beatAtTime(time) == beat."
++        // Wait, the prompt says "If in a session, it waits for the next time the session phase matches...".
++        // Let's implement the force version here, and the quantized version if it's in a session?
++        // Let's just implement force for now, or the correct quantised logic.
++        // Let's check the rules for quantized launch:
++        let _phase = self.phase_at_time(time, quantum);
++        // We want beat_at_time(new_time) == beat.
++        // Actually, just force_beat_at_time for now.
++        self.force_beat_at_time(time, beat);
++    }
++
++    pub fn force_beat_at_time(&mut self, time: HostTime, beat: Beats) {
++        let dt = time.0.wrapping_sub(self.timeline.time_origin.0) as f64;
++        let dbeats = dt / (self.timeline.tempo.0 as f64);
++        self.timeline.beat_origin = MicroBeats::from_beats(beat - dbeats);
++    }
++
++    pub fn set_tempo(&mut self, bpm: f64, at: HostTime) {
++        let current_beat = self.beat_at_time(at, 0.0);
++        self.timeline.tempo = TempoWire::from_tempo(Tempo(bpm));
++        self.timeline.time_origin = at;
++        self.timeline.beat_origin = MicroBeats::from_beats(current_beat);
++    }
++
++    pub fn set_is_playing(&mut self, playing: bool, at: HostTime) {
++        self.start_stop.is_playing = playing;
++        self.start_stop.time = at;
++        self.start_stop.beat = MicroBeats::from_beats(self.beat_at_time(at, 0.0));
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn test_timeline_math_vectors() {
++        // Given Tempo = 120.0 (500000us/beat), beatOrigin = 0.0, timeOrigin = 0us
++        let mut state = SessionState::default();
++        state.timeline.tempo = TempoWire(500000);
++        state.timeline.beat_origin = MicroBeats(0);
++        state.timeline.time_origin = HostTime(0);
++
++        // beatAtTime(2000000us) = 4
++        assert_eq!(state.beat_at_time(HostTime(2000000), 4.0), 4.0);
++        
++        // phaseAtTime(2000000us, 4.0) = 0
++        assert_eq!(state.phase_at_time(HostTime(2000000), 4.0), 0.0);
++        
++        // timeAtBeat(4.0) = 2000000us
++        assert_eq!(state.time_at_beat(4.0, 4.0), HostTime(2000000));
++        
++        // phase(-1.0, 4.0) = 3
++        let beat: f64 = -1.0;
++        let q = 4.0;
++        let quantum_bins = (beat.abs() + q) / q;
++        let quantum_bins_int = quantum_bins.floor();
++        let phase = (beat + quantum_bins_int * q) % q;
++        assert_eq!(phase, 3.0);
++
++        // phase(-5.0, 4.0) = 3
++        let beat: f64 = -5.0;
++        let quantum_bins = (beat.abs() + q) / q;
++        let quantum_bins_int = quantum_bins.floor();
++        let phase = (beat + quantum_bins_int * q) % q;
++        assert_eq!(phase, 3.0);
++
++        // phase(5.0, 4.0) = 1
++        let beat: f64 = 5.0;
++        let quantum_bins = (beat.abs() + q) / q;
++        let quantum_bins_int = quantum_bins.floor();
++        let phase = (beat + quantum_bins_int * q) % q;
++        assert_eq!(phase, 1.0);
++    }
++}
++
++impl SessionState {
++    pub fn next_phase_match(cur: Beats, target: Beats, q: f64) -> Beats {
++        if q == 0.0 { return target; }
++        let diff = cur - target;
++        let bins = diff / q;
++        let ceil_bins = bins.ceil();
++        ceil_bins * q + target
++    }
++
++    pub fn request_beat_at_time_quantized(&mut self, time: HostTime, beat: Beats, quantum: f64) {
++        let cur_beat = self.beat_at_time(time, quantum);
++        let next_match = Self::next_phase_match(cur_beat, beat, quantum);
++        let time_to_force = self.time_at_beat(next_match, quantum);
++        self.force_beat_at_time(time_to_force, beat);
++    }
++}
++
++#[cfg(test)]
++mod more_tests {
++    use super::*;
++
++    #[test]
++    fn test_quantized_launch() {
++        let mut state = SessionState::default();
++        state.timeline.tempo = TempoWire(500000);
++        state.timeline.beat_origin = MicroBeats(0);
++        state.timeline.time_origin = HostTime(0);
++
++        state.request_beat_at_time_quantized(HostTime(3000000), 1.0, 4.0);
++        
++        assert_eq!(state.timeline.beat_origin.to_beats(), -8.0);
++        assert_eq!(state.timeline.time_origin.0, 0);
++        assert_eq!(state.beat_at_time(HostTime(4500000), 4.0), 1.0);
++    }
++}
+diff --git a/third_party/tempo_sync_core/src/wire.rs b/third_party/tempo_sync_core/src/wire.rs
+new file mode 100644
+index 0000000000000..91f0a4d7d8ffe
+--- /dev/null
++++ b/third_party/tempo_sync_core/src/wire.rs
+@@ -0,0 +1,307 @@
++use crate::engine::SocketAddrPlain;
++// SPDX-License-Identifier: Apache-2.0
++
++use crate::time::{HostTime, MicroBeats, TempoWire};
++use crate::timeline::{Timeline, StartStopState};
++
++pub const ASDP_MAGIC: &[u8; 8] = b"_asdp_v\x01";
++pub const LINK_MAGIC: &[u8; 8] = b"_link_v\x01";
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
++pub struct NodeId(pub [u8; 8]);
++
++#[derive(Debug, Clone, PartialEq)]
++pub enum DiscoveryMsg {
++    Alive {
++        node_id: NodeId,
++        timeline: Option<Timeline>,
++        start_stop: Option<StartStopState>,
++        session_id: Option<NodeId>,
++        mep4: Option<crate::SocketAddrPlain>,
++    },
++    ByeBye {
++        node_id: NodeId,
++    },
++}
++
++#[derive(Debug, Clone, PartialEq)]
++pub enum MeasurementMsg {
++    Ping {
++        host_time: HostTime,
++        prev_ghost_time: Option<HostTime>,
++    },
++    Pong {
++        session_id: Option<NodeId>,
++        ghost_time: HostTime,
++        ping_host_time: HostTime,
++        ping_prev_ghost_time: Option<HostTime>,
++    },
++}
++
++#[derive(Debug, Clone, PartialEq)]
++pub enum Message {
++    Discovery(DiscoveryMsg),
++    Measurement(MeasurementMsg),
++}
++
++pub fn parse_message(bytes: &[u8]) -> Option<Message> {
++    if bytes.len() < 8 { return None; }
++    let magic = &bytes[0..8];
++    if magic == ASDP_MAGIC {
++        if bytes.len() < 20 { return None; }
++        let msg_type = bytes[8];
++        let mut node_id = [0u8; 8];
++        node_id.copy_from_slice(&bytes[12..20]);
++        let node_id = NodeId(node_id);
++
++        if msg_type == 3 {
++            return Some(Message::Discovery(DiscoveryMsg::ByeBye { node_id }));
++        } else if msg_type == 1 || msg_type == 2 {
++            let mut timeline = None;
++            let mut start_stop = None;
++            let mut session_id = None;
++        let mut mep4: Option<crate::SocketAddrPlain> = None;
++
++            let mut offset = 20;
++            while offset + 8 <= bytes.len() {
++                let key = &bytes[offset..offset+4];
++                let size = u32::from_be_bytes(bytes[offset+4..offset+8].try_into().unwrap()) as usize;
++                offset += 8;
++                if offset + size > bytes.len() { break; }
++                let value = &bytes[offset..offset+size];
++                match key {
++                    b"tmln" if size == 24 => {
++                        let tempo = TempoWire(i64::from_be_bytes(value[0..8].try_into().unwrap()));
++                        let beat_origin = MicroBeats(i64::from_be_bytes(value[8..16].try_into().unwrap()));
++                        let time_origin = HostTime(i64::from_be_bytes(value[16..24].try_into().unwrap()));
++                        timeline = Some(Timeline { tempo, beat_origin, time_origin });
++                    }
++                    b"stst" if size == 17 => {
++                        let is_playing = value[0] != 0;
++                        let beat = MicroBeats(i64::from_be_bytes(value[1..9].try_into().unwrap()));
++                        let time = HostTime(i64::from_be_bytes(value[9..17].try_into().unwrap()));
++                        start_stop = Some(StartStopState { is_playing, beat, time });
++                    }
++                    b"sess" if size == 8 => {
++                        let mut sess = [0u8; 8];
++                        sess.copy_from_slice(value);
++                        session_id = Some(NodeId(sess));
++                    }
++                    b"mep4" if size == 6 => {
++                        let mut ip = [0u8; 4]; ip.copy_from_slice(&value[0..4]);
++                        let port = u16::from_be_bytes(value[4..6].try_into().unwrap());
++                        mep4 = Some(crate::SocketAddrPlain { ip, port });
++                        // println!("PARSED MEP4: ip={:?} port={}", ip, port);
++                    }
++                    _ => {}
++                }
++                offset += size;
++            }
++            return Some(Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id, mep4 }));
++        }
++    } else if magic == LINK_MAGIC {
++        if bytes.len() < 9 { return None; }
++        let msg_type = bytes[8];
++        let mut host_time = None;
++        let mut prev_ghost_time = None;
++        let mut ghost_time = None;
++        let mut session_id = None;
++        let mut ping_host_time = None;
++        let mut ping_prev_ghost_time = None;
++
++        let mut offset = 9;
++        if msg_type == 1 {
++            while offset + 8 <= bytes.len() {
++                let key = &bytes[offset..offset+4];
++                let size = u32::from_be_bytes(bytes[offset+4..offset+8].try_into().unwrap()) as usize;
++                offset += 8;
++                if offset + size > bytes.len() { break; }
++                let value = &bytes[offset..offset+size];
++                match key {
++                    b"__ht" if size == 8 => host_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
++                    b"_pgt" if size == 8 => prev_ghost_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
++                    _ => {}
++                }
++                offset += size;
++            }
++            if let Some(ht) = host_time {
++                return Some(Message::Measurement(MeasurementMsg::Ping { host_time: ht, prev_ghost_time }));
++            }
++        } else if msg_type == 2 {
++            while offset + 8 <= bytes.len() {
++                let key = &bytes[offset..offset+4];
++                let size = u32::from_be_bytes(bytes[offset+4..offset+8].try_into().unwrap()) as usize;
++                offset += 8;
++                if offset + size > bytes.len() { break; }
++                let value = &bytes[offset..offset+size];
++                match key {
++                    b"sess" if size == 8 => {
++                        let mut sess = [0u8; 8];
++                        sess.copy_from_slice(value);
++                        session_id = Some(NodeId(sess));
++                    }
++                    b"__gt" if size == 8 => ghost_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
++                    b"__ht" if size == 8 => ping_host_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
++                    b"_pgt" if size == 8 => ping_prev_ghost_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
++                    _ => {}
++                }
++                offset += size;
++            }
++            if let (Some(gt), Some(ht)) = (ghost_time, ping_host_time) {
++                return Some(Message::Measurement(MeasurementMsg::Pong { session_id, ghost_time: gt, ping_host_time: ht, ping_prev_ghost_time }));
++            }
++        }
++    }
++    None
++}
++
++pub fn serialize_discovery_alive(node_id: &NodeId, session_id: &NodeId, timeline: &Timeline, start_stop: &StartStopState, mep4: Option<SocketAddrPlain>, is_response: bool) -> Vec<u8> {
++    let mut out = Vec::new();
++    out.extend_from_slice(ASDP_MAGIC);
++    out.push(if is_response { 2 } else { 1 }); // type Alive or Response
++    out.push(5); // TTL
++    out.extend_from_slice(&[0, 0]); // GroupId = 0
++    out.extend_from_slice(&node_id.0);
++
++    // Timeline
++    out.extend_from_slice(b"tmln");
++    out.extend_from_slice(&24u32.to_be_bytes());
++    out.extend_from_slice(&timeline.tempo.0.to_be_bytes());
++    out.extend_from_slice(&timeline.beat_origin.0.to_be_bytes());
++    out.extend_from_slice(&timeline.time_origin.0.to_be_bytes());
++
++    // SessionMembership
++    out.extend_from_slice(b"sess");
++    out.extend_from_slice(&8u32.to_be_bytes());
++    out.extend_from_slice(&session_id.0);
++
++    // StartStopState
++    out.extend_from_slice(b"stst");
++    out.extend_from_slice(&17u32.to_be_bytes());
++    out.push(if start_stop.is_playing { 1 } else { 0 });
++    out.extend_from_slice(&start_stop.beat.0.to_be_bytes());
++    out.extend_from_slice(&start_stop.time.0.to_be_bytes());
++
++    if let Some(mep) = mep4 {
++        out.extend_from_slice(b"mep4");
++        out.extend_from_slice(&6u32.to_be_bytes());
++        out.extend_from_slice(&mep.ip);
++        out.extend_from_slice(&mep.port.to_be_bytes());
++        // Also advertise aep4 just in case
++        
++    }
++
++    out
++}
++
++pub fn serialize_discovery_byebye(node_id: &NodeId) -> Vec<u8> {
++    let mut out = Vec::new();
++    out.extend_from_slice(ASDP_MAGIC);
++    out.push(3); // type ByeBye
++    out.push(0); // TTL = 0
++    out.extend_from_slice(&[0, 0]); // GroupId = 0
++    out.extend_from_slice(&node_id.0);
++    out
++}
++
++pub fn serialize_measurement_ping(host_time: HostTime, prev_ghost_time: Option<HostTime>) -> Vec<u8> {
++    let mut out = Vec::new();
++    out.extend_from_slice(LINK_MAGIC);
++    out.push(1); // type Ping
++
++    out.extend_from_slice(b"__ht");
++    out.extend_from_slice(&8u32.to_be_bytes());
++    out.extend_from_slice(&host_time.0.to_be_bytes());
++
++    if let Some(pgt) = prev_ghost_time {
++        out.extend_from_slice(b"_pgt");
++        out.extend_from_slice(&8u32.to_be_bytes());
++        out.extend_from_slice(&pgt.0.to_be_bytes());
++    }
++
++    out
++}
++
++pub fn serialize_measurement_pong(session_id: &NodeId, ghost_time: HostTime, ping_payload: &[u8]) -> Vec<u8> {
++    let mut out = Vec::new();
++    out.extend_from_slice(LINK_MAGIC);
++    out.push(2); // type Pong
++
++    out.extend_from_slice(b"sess");
++    out.extend_from_slice(&8u32.to_be_bytes());
++    out.extend_from_slice(&session_id.0);
++
++    out.extend_from_slice(b"__gt");
++    out.extend_from_slice(&8u32.to_be_bytes());
++    out.extend_from_slice(&ghost_time.0.to_be_bytes());
++
++    out.extend_from_slice(ping_payload);
++    out
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn test_parse_discovery_alive() {
++        let hex = "5f617364705f7601010500000102030405060708746d6c6e00000018000000000007a120000000000000000000000000000000007365737300000008080706050403020173747374000000110100000000000f424000000000001e84806d65703400000006c0a8010551486165703400000006c0a801055149";
++        let bytes = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect::<Vec<u8>>();
++        let msg = parse_message(&bytes).unwrap();
++        match msg {
++            Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id, mep4: _ }) => {
++                assert_eq!(node_id.0, [1, 2, 3, 4, 5, 6, 7, 8]);
++                assert_eq!(timeline.as_ref().unwrap().tempo.0, 500000);
++                assert_eq!(timeline.as_ref().unwrap().beat_origin.0, 0);
++                assert_eq!(timeline.as_ref().unwrap().time_origin.0, 0);
++                assert_eq!(session_id.unwrap().0, [8, 7, 6, 5, 4, 3, 2, 1]);
++                assert_eq!(start_stop.as_ref().unwrap().is_playing, true);
++                assert_eq!(start_stop.as_ref().unwrap().beat.0, 1000000);
++                assert_eq!(start_stop.as_ref().unwrap().time.0, 2000000);
++            }
++            _ => panic!("Wrong message type"),
++        }
++    }
++
++    #[test]
++    fn test_parse_discovery_byebye() {
++        let hex = "5f617364705f7601030000000102030405060708";
++        let bytes = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect::<Vec<u8>>();
++        let msg = parse_message(&bytes).unwrap();
++        match msg {
++            Message::Discovery(DiscoveryMsg::ByeBye { node_id }) => {
++                assert_eq!(node_id.0, [1, 2, 3, 4, 5, 6, 7, 8]);
++            }
++            _ => panic!("Wrong message type"),
++        }
++    }
++
++    #[test]
++    fn test_parse_measurement_ping() {
++        let hex = "5f6c696e6b5f7601015f5f68740000000800000000000f42405f70677400000008000000000007a120";
++        let bytes = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect::<Vec<u8>>();
++        let msg = parse_message(&bytes).unwrap();
++        match msg {
++            Message::Measurement(MeasurementMsg::Ping { host_time, prev_ghost_time }) => {
++                assert_eq!(host_time.0, 1000000);
++                assert_eq!(prev_ghost_time.unwrap().0, 500000);
++            }
++            _ => panic!("Wrong message type"),
++        }
++    }
++
++    #[test]
++    fn test_parse_measurement_pong() {
++        let hex = "5f6c696e6b5f760102736573730000000808070605040302015f5f67740000000800000000000f42405f5f68740000000800000000000f4240";
++        let bytes = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect::<Vec<u8>>();
++        let msg = parse_message(&bytes).unwrap();
++        match msg {
++            Message::Measurement(MeasurementMsg::Pong { session_id, ghost_time, ping_host_time, ping_prev_ghost_time: _ }) => {
++                assert_eq!(session_id.unwrap().0, [8, 7, 6, 5, 4, 3, 2, 1]);
++                assert_eq!(ghost_time.0, 1000000);
++                assert_eq!(ping_host_time.0, 1000000);
++            }
++            _ => panic!("Wrong message type"),
++        }
++    }
++}
+-- 
+2.56.0.257.gf7497c7d27-goog
+
