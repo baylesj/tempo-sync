@@ -9,6 +9,8 @@ use crate::wire::{Message, DiscoveryMsg, MeasurementMsg, NodeId, serialize_disco
 pub struct InterfaceId(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+
+#[derive(Default)]
 pub struct SocketAddrPlain {
     pub ip: [u8; 4],
     pub port: u16,
@@ -89,8 +91,9 @@ pub struct Engine {
     pub session_offset: i64,
     pub state: SessionState, // In HostTime
     
-    pub interfaces: HashMap<InterfaceId, [u8; 4]>,
+    pub interfaces: HashMap<InterfaceId, SocketAddrPlain>,
     pub peers: HashMap<NodeId, PeerState>,
+    pub dump_packets: bool,
     
     pub next_broadcast: HostTime,
 }
@@ -106,6 +109,7 @@ impl Engine {
             interfaces: HashMap::new(),
             peers: HashMap::new(),
             next_broadcast: HostTime(0),
+            dump_packets: false,
         }
     }
 
@@ -122,12 +126,13 @@ impl Engine {
             let mut ghost_ss = self.state.start_stop.clone();
             ghost_ss.time = HostTime(ghost_ss.time.0.wrapping_add(self.session_offset));
 
-            let msg = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss);
-            for &iface_id in self.interfaces.keys() {
+            for (&iface_id, mep4) in &self.interfaces {
+                let msg = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss, Some(*mep4), false);
+                if self.dump_packets { println!("SEND MULTICAST ALIVE: {:x?}", msg); }
                 outputs.push(Output::Send {
                     iface_id,
-                    to: SocketAddrPlain { ip: [224, 76, 110, 107], port: 20808 },
-                    bytes: msg.clone(),
+                    to: SocketAddrPlain { ip: [224, 76, 78, 75], port: 20808 },
+                    bytes: msg,
                 });
             }
             // "A hard floor of 50ms is enforced... nominal interval is 250ms"
@@ -147,6 +152,7 @@ impl Engine {
                 peer.ping_timeouts += 1;
                 
                 let ping = serialize_measurement_ping(now, None);
+                if self.dump_packets { println!("SEND PING (INIT): {:x?}", ping); }
                 for &iface_id in self.interfaces.keys() {
                     outputs.push(Output::Send {
                         iface_id,
@@ -192,10 +198,10 @@ impl Engine {
     pub fn handle_packet(&mut self, iface_id: InterfaceId, from: SocketAddrPlain, bytes: &[u8], now: HostTime) -> Vec<Output> {
         let mut outputs = Vec::new();
         if !self.enabled { return outputs; }
-        
+        if self.dump_packets { println!("RECV MSG: {:x?}", bytes); }
         if let Some(msg) = crate::wire::parse_message(bytes) {
             match msg {
-                Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id }) => {
+                Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id, mep4 }) => {
                     if node_id == self.node_id { return outputs; } // Ignore self
                     
                     let is_new = !self.peers.contains_key(&node_id);
@@ -203,7 +209,8 @@ impl Engine {
 
                     let peer = self.peers.entry(node_id).or_insert_with(|| PeerState::new(from, now));
                     peer.last_seen = now;
-                    peer.addr = from;
+                    peer.addr = mep4.unwrap_or(from);
+                    println!("UPDATED PEER ADDR TO port={}", peer.addr.port);
                     
                     if peer.timeline_ghost != timeline || peer.start_stop_ghost != start_stop || peer.session_id != session_id {
                         peer.timeline_ghost = timeline;
@@ -216,10 +223,12 @@ impl Engine {
                         ghost_tl.time_origin = HostTime(ghost_tl.time_origin.0.wrapping_add(self.session_offset));
                         let mut ghost_ss = self.state.start_stop.clone();
                         ghost_ss.time = HostTime(ghost_ss.time.0.wrapping_add(self.session_offset));
-                        let resp = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss);
+                        let mep4 = self.interfaces.get(&iface_id).copied();
+                        let resp = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss, mep4, true);
+                        if self.dump_packets { println!("SEND RESPONSE ALIVE: {:x?}", resp); }
                         outputs.push(Output::Send {
                             iface_id,
-                            to: from,
+                            to: peer.addr,
                             bytes: resp,
                         });
                     }
@@ -241,14 +250,15 @@ impl Engine {
                     // Pong: `__gt` is our GhostTime
                     let our_ghost_time = HostTime(now.0.wrapping_add(self.session_offset));
                     let pong = serialize_measurement_pong(&self.session_id, our_ghost_time, bytes);
+                    if self.dump_packets { println!("SEND PONG: {:x?}", pong); }
                     outputs.push(Output::Send {
                         iface_id,
                         to: from,
                         bytes: pong,
                     });
                 }
-                Message::Measurement(MeasurementMsg::Pong { session_id: _, ghost_time: b_t2, ping_payload }) => {
-                    if let Some(Message::Measurement(MeasurementMsg::Ping { host_time: a_t2, prev_ghost_time })) = crate::wire::parse_message(&ping_payload) {
+                Message::Measurement(MeasurementMsg::Pong { session_id: _, ghost_time: b_t2, ping_host_time: a_t2, ping_prev_ghost_time: prev_ghost_time }) => {
+                    {
                         let a_t3 = now;
                         let offset = if let Some(b_t1) = prev_ghost_time {
                             let off1 = b_t2.0.wrapping_sub((a_t3.0.wrapping_add(a_t2.0)) / 2);
@@ -273,6 +283,7 @@ impl Engine {
                                 } else {
                                     // Send immediate follow-up
                                     let ping = serialize_measurement_ping(now, Some(b_t2));
+                                    if self.dump_packets { println!("SEND PING: {:x?}", ping); }
                                     outputs.push(Output::Send {
                                         iface_id,
                                         to: peer.addr,
@@ -328,7 +339,7 @@ impl Engine {
                 for &iface_id in self.interfaces.keys() {
                     outputs.push(Output::Send {
                         iface_id,
-                        to: SocketAddrPlain { ip: [224, 76, 110, 107], port: 20808 },
+                        to: SocketAddrPlain { ip: [224, 76, 78, 75], port: 20808 },
                         bytes: msg.clone(),
                     });
                 }
@@ -339,15 +350,10 @@ impl Engine {
         outputs
     }
 
-    pub fn add_interface(&mut self, iface_id: InterfaceId, local_addr: [u8; 4]) -> Vec<Output> {
-        let mut outputs = Vec::new();
+    pub fn add_interface(&mut self, iface_id: InterfaceId, local_addr: SocketAddrPlain) -> Vec<Output> {
+        let outputs = Vec::new();
         self.interfaces.insert(iface_id, local_addr);
-        outputs.push(Output::JoinMulticast {
-            iface_id,
-            group: [224, 76, 110, 107],
-            port: 20808,
-        });
-        outputs.push(Output::OpenUnicast { iface_id });
+        // Note: join multicast logic handled outside, engine shouldn't emit OpenUnicast if it already receives the port.
         outputs
     }
 

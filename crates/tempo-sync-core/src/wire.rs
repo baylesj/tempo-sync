@@ -1,3 +1,4 @@
+use crate::engine::SocketAddrPlain;
 // SPDX-License-Identifier: Apache-2.0
 
 use crate::time::{HostTime, MicroBeats, TempoWire};
@@ -16,6 +17,7 @@ pub enum DiscoveryMsg {
         timeline: Option<Timeline>,
         start_stop: Option<StartStopState>,
         session_id: Option<NodeId>,
+        mep4: Option<crate::SocketAddrPlain>,
     },
     ByeBye {
         node_id: NodeId,
@@ -31,7 +33,8 @@ pub enum MeasurementMsg {
     Pong {
         session_id: Option<NodeId>,
         ghost_time: HostTime,
-        ping_payload: Vec<u8>,
+        ping_host_time: HostTime,
+        ping_prev_ghost_time: Option<HostTime>,
     },
 }
 
@@ -53,10 +56,11 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
 
         if msg_type == 3 {
             return Some(Message::Discovery(DiscoveryMsg::ByeBye { node_id }));
-        } else if msg_type == 1 {
+        } else if msg_type == 1 || msg_type == 2 {
             let mut timeline = None;
             let mut start_stop = None;
             let mut session_id = None;
+        let mut mep4: Option<crate::SocketAddrPlain> = None;
 
             let mut offset = 20;
             while offset + 8 <= bytes.len() {
@@ -68,8 +72,8 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
                 match key {
                     b"tmln" if size == 24 => {
                         let tempo = TempoWire(i64::from_be_bytes(value[0..8].try_into().unwrap()));
-                        let beat_origin = MicroBeats(i64::from_be_bytes(value[8..16].try_into().unwrap()));
-                        let time_origin = HostTime(i64::from_be_bytes(value[16..24].try_into().unwrap()));
+                        let time_origin = HostTime(i64::from_be_bytes(value[8..16].try_into().unwrap()));
+                        let beat_origin = MicroBeats(i64::from_be_bytes(value[16..24].try_into().unwrap()));
                         timeline = Some(Timeline { tempo, beat_origin, time_origin });
                     }
                     b"stst" if size == 17 => {
@@ -83,11 +87,17 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
                         sess.copy_from_slice(value);
                         session_id = Some(NodeId(sess));
                     }
+                    b"mep4" if size == 6 => {
+                        let mut ip = [0u8; 4]; ip.copy_from_slice(&value[0..4]);
+                        let port = u16::from_be_bytes(value[4..6].try_into().unwrap());
+                        mep4 = Some(crate::SocketAddrPlain { ip, port });
+                        println!("PARSED MEP4: ip={:?} port={}", ip, port);
+                    }
                     _ => {}
                 }
                 offset += size;
             }
-            return Some(Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id }));
+            return Some(Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id, mep4 }));
         }
     } else if magic == LINK_MAGIC {
         if bytes.len() < 9 { return None; }
@@ -96,7 +106,8 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
         let mut prev_ghost_time = None;
         let mut ghost_time = None;
         let mut session_id = None;
-        let mut ping_payload = Vec::new();
+        let mut ping_host_time = None;
+        let mut ping_prev_ghost_time = None;
 
         let mut offset = 9;
         if msg_type == 1 {
@@ -117,19 +128,27 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
                 return Some(Message::Measurement(MeasurementMsg::Ping { host_time: ht, prev_ghost_time }));
             }
         } else if msg_type == 2 {
-            // Pong may append Ping payload
-            // let start_offset = offset;
             while offset + 8 <= bytes.len() {
-                let key = &bytes[offset..offset+4];
-                let size = u32::from_be_bytes(bytes[offset+4..offset+8].try_into().unwrap()) as usize;
-                
-                // If we see another _link_v1, that's the appended ping payload! Wait, does the ping payload include the magic header?
-                // "Appends the entire payload of the received Ping". The ping payload means from byte 0.
-                if key == b"_lin" {
-                     ping_payload.extend_from_slice(&bytes[offset..]);
-                     break;
+                if &bytes[offset..offset+8] == LINK_MAGIC {
+                    let mut inner_offset = offset + 9;
+                    while inner_offset + 8 <= bytes.len() {
+                        let inner_key = &bytes[inner_offset..inner_offset+4];
+                        let inner_size = u32::from_be_bytes(bytes[inner_offset+4..inner_offset+8].try_into().unwrap()) as usize;
+                        inner_offset += 8;
+                        if inner_offset + inner_size > bytes.len() { break; }
+                        let inner_val = &bytes[inner_offset..inner_offset+inner_size];
+                        match inner_key {
+                            b"__ht" if inner_size == 8 => ping_host_time = Some(HostTime(i64::from_be_bytes(inner_val.try_into().unwrap()))),
+                            b"_pgt" if inner_size == 8 => ping_prev_ghost_time = Some(HostTime(i64::from_be_bytes(inner_val.try_into().unwrap()))),
+                            _ => {}
+                        }
+                        inner_offset += inner_size;
+                    }
+                    break;
                 }
 
+                let key = &bytes[offset..offset+4];
+                let size = u32::from_be_bytes(bytes[offset+4..offset+8].try_into().unwrap()) as usize;
                 offset += 8;
                 if offset + size > bytes.len() { break; }
                 let value = &bytes[offset..offset+size];
@@ -140,32 +159,32 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
                         session_id = Some(NodeId(sess));
                     }
                     b"__gt" if size == 8 => ghost_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
-                    b"_lin" => {} // Handled above, but just in case
                     _ => {}
                 }
                 offset += size;
             }
-            if let Some(gt) = ghost_time {
-                return Some(Message::Measurement(MeasurementMsg::Pong { session_id, ghost_time: gt, ping_payload }));
+            if let (Some(gt), Some(ht)) = (ghost_time, ping_host_time) {
+                return Some(Message::Measurement(MeasurementMsg::Pong { session_id, ghost_time: gt, ping_host_time: ht, ping_prev_ghost_time }));
             }
         }
     }
     None
 }
 
-pub fn serialize_discovery_alive(node_id: &NodeId, session_id: &NodeId, timeline: &Timeline, start_stop: &StartStopState) -> Vec<u8> {
+pub fn serialize_discovery_alive(node_id: &NodeId, session_id: &NodeId, timeline: &Timeline, start_stop: &StartStopState, mep4: Option<SocketAddrPlain>, is_response: bool) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(ASDP_MAGIC);
-    out.push(1); // type Alive
-    out.extend_from_slice(&[0, 0, 0]); // padding
+    out.push(if is_response { 2 } else { 1 }); // type Alive or Response
+    out.push(5); // TTL
+    out.extend_from_slice(&[0, 0]); // GroupId = 0
     out.extend_from_slice(&node_id.0);
 
     // Timeline
     out.extend_from_slice(b"tmln");
     out.extend_from_slice(&24u32.to_be_bytes());
     out.extend_from_slice(&timeline.tempo.0.to_be_bytes());
-    out.extend_from_slice(&timeline.beat_origin.0.to_be_bytes());
     out.extend_from_slice(&timeline.time_origin.0.to_be_bytes());
+    out.extend_from_slice(&timeline.beat_origin.0.to_be_bytes());
 
     // SessionMembership
     out.extend_from_slice(b"sess");
@@ -179,6 +198,15 @@ pub fn serialize_discovery_alive(node_id: &NodeId, session_id: &NodeId, timeline
     out.extend_from_slice(&start_stop.beat.0.to_be_bytes());
     out.extend_from_slice(&start_stop.time.0.to_be_bytes());
 
+    if let Some(mep) = mep4 {
+        out.extend_from_slice(b"mep4");
+        out.extend_from_slice(&6u32.to_be_bytes());
+        out.extend_from_slice(&mep.ip);
+        out.extend_from_slice(&mep.port.to_be_bytes());
+        // Also advertise aep4 just in case
+        
+    }
+
     out
 }
 
@@ -186,7 +214,8 @@ pub fn serialize_discovery_byebye(node_id: &NodeId) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(ASDP_MAGIC);
     out.push(3); // type ByeBye
-    out.extend_from_slice(&[0, 0, 0]); // padding
+    out.push(0); // TTL = 0
+    out.extend_from_slice(&[0, 0]); // GroupId = 0
     out.extend_from_slice(&node_id.0);
     out
 }
@@ -236,7 +265,7 @@ mod tests {
         let bytes = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect::<Vec<u8>>();
         let msg = parse_message(&bytes).unwrap();
         match msg {
-            Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id }) => {
+            Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id, mep4: _ }) => {
                 assert_eq!(node_id.0, [1, 2, 3, 4, 5, 6, 7, 8]);
                 assert_eq!(timeline.as_ref().unwrap().tempo.0, 500000);
                 assert_eq!(timeline.as_ref().unwrap().beat_origin.0, 0);
@@ -279,14 +308,16 @@ mod tests {
 
     #[test]
     fn test_parse_measurement_pong() {
-        let hex = "5f6c696e6b5f760102736573730000000808070605040302015f5f67740000000800000000000f42405f6c696e6b5f760102736573730000000808070605040302015f5f67740000000800000000000f4240";
+        // ping packet is: _link_v1 01 __ht [8] 1000000
+        // pong packet wraps it: _link_v1 02 sess [8] 0807060504030201 __gt [8] 1000000 <ping>
+        let hex = "5f6c696e6b5f760102736573730000000808070605040302015f5f67740000000800000000000f42405f6c696e6b5f7601015f5f68740000000800000000000f4240";
         let bytes = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect::<Vec<u8>>();
         let msg = parse_message(&bytes).unwrap();
         match msg {
-            Message::Measurement(MeasurementMsg::Pong { session_id, ghost_time, ping_payload }) => {
+            Message::Measurement(MeasurementMsg::Pong { session_id, ghost_time, ping_host_time, ping_prev_ghost_time: _ }) => {
                 assert_eq!(session_id.unwrap().0, [8, 7, 6, 5, 4, 3, 2, 1]);
                 assert_eq!(ghost_time.0, 1000000);
-                assert!(ping_payload.starts_with(LINK_MAGIC));
+                assert_eq!(ping_host_time.0, 1000000);
             }
             _ => panic!("Wrong message type"),
         }
