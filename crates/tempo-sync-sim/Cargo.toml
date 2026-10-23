@@ -1,0 +1,7 @@
+[package]
+name = "tempo-sync-sim"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tempo-sync-core = { path = "../tempo-sync-core" }
