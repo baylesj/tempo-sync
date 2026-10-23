@@ -1,0 +1,48 @@
+name: Interoperability Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  interop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check out Ableton Link reference repository
+        run: |
+          git clone --recurse-submodules https://github.com/Ableton/link.git /tmp/ableton-link
+          cd /tmp/ableton-link
+          git checkout 5ba907ae027a8c2ec8824463e37296dcefc5e9be
+          git submodule update --init --recursive
+
+      - name: Build C++ Link Peer Oracle
+        run: |
+          LINK_DIR=/tmp/ableton-link ./tools/linkpeer/build.sh
+
+      - name: Set up Rust toolchain
+        if: hashFiles('Cargo.toml') != ''
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Rust workspace
+        if: hashFiles('Cargo.toml') != ''
+        run: cargo build --workspace
+
+      - name: Run interop test harness
+        run: |
+          if [ -f "Cargo.toml" ] && cargo run -p tempohut -- --help >/dev/null 2>&1; then
+            echo "Running full interop against Rust tempohut..."
+            ./tools/interop/run_interop.py
+          else
+            echo "Running interop in standalone C++ oracle mode (--skip-rust)..."
+            ./tools/interop/run_interop.py --skip-rust
+          fi
