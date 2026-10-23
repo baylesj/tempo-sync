@@ -74,8 +74,9 @@ impl SessionState {
     }
 
     pub fn force_beat_at_time(&mut self, time: HostTime, beat: Beats) {
-        self.timeline.time_origin = time;
-        self.timeline.beat_origin = MicroBeats::from_beats(beat);
+        let dt = time.0.wrapping_sub(self.timeline.time_origin.0) as f64;
+        let dbeats = dt / (self.timeline.tempo.0 as f64);
+        self.timeline.beat_origin = MicroBeats::from_beats(beat - dbeats);
     }
 
     pub fn set_tempo(&mut self, bpm: f64, at: HostTime) {
