@@ -145,12 +145,12 @@ impl Runtime {
                             let ip = self.ifaces[iface_id.0 as usize];
                             mcast_send_sock2.set_multicast_if_v4(&ip).unwrap();
                             mcast_send_sock.set_multicast_ttl_v4(5).unwrap();
-                            println!("TX to {}: {}", to_addr, bytes.iter().map(|b| format!("{:02X}", b)).collect::<String>());
+                            if self.engine.dump_packets { eprintln!("TX to {}: {}", to_addr, bytes.iter().map(|b| format!("{:02X}", b)).collect::<String>()); }
                             let _ = mcast_send_sock.send_to(&bytes, to_addr);
                         } else {
                             // Unicast
                             if let Some(sock) = sockets.get(&iface_id) {
-                                println!("TX to {}: {}", to_addr, bytes.iter().map(|b| format!("{:02X}", b)).collect::<String>()); let _ = sock.send_to(&bytes, to_addr);
+                                if self.engine.dump_packets { eprintln!("TX to {}: {}", to_addr, bytes.iter().map(|b| format!("{:02X}", b)).collect::<String>()); } let _ = sock.send_to(&bytes, to_addr);
                             }
                         }
                     }
@@ -193,7 +193,7 @@ impl Runtime {
             let mut buf = [0u8; 2048];
             for (&id, sock) in sockets.iter() {
                 while let Ok((len, from)) = sock.recv_from(&mut buf) {
-                    println!("RX from {}: {}", from, buf[..len].iter().map(|b| format!("{:02X}", b)).collect::<String>());
+                    if self.engine.dump_packets { eprintln!("RX from {}: {}", from, buf[..len].iter().map(|b| format!("{:02X}", b)).collect::<String>()); }
                     if let std::net::SocketAddr::V4(v4) = from {
                         let plain = SocketAddrPlain { ip: v4.ip().octets(), port: v4.port() };
                         outputs.extend(self.engine.handle_packet(id, plain, &buf[..len], now));
@@ -204,7 +204,7 @@ impl Runtime {
             // Pass interface ID 0 as a dummy, or attempt to find the right one.
             // Since we bound 0.0.0.0, we just process it.
             while let Ok((len, from)) = multi_sock_std.recv_from(&mut buf) {
-                println!("RX from {}: {}", from, buf[..len].iter().map(|b| format!("{:02X}", b)).collect::<String>());
+                if self.engine.dump_packets { eprintln!("RX from {}: {}", from, buf[..len].iter().map(|b| format!("{:02X}", b)).collect::<String>()); }
                 if let std::net::SocketAddr::V4(v4) = from {
                     let plain = SocketAddrPlain { ip: v4.ip().octets(), port: v4.port() };
                     // Default to InterfaceId(0) for incoming multicasts

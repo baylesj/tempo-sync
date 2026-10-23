@@ -5,3 +5,7 @@ edition = "2021"
 
 [dependencies]
 tempo-sync-core = { path = "../tempo-sync-core" }
+# Only the std adapter depends on socket2. It is needed to set SO_REUSEADDR
+# and SO_REUSEPORT before bind so that several Link peers can share port
+# 20808 on one host. The core stays dependency free.
+socket2 = { version = "0.5", features = ["all"] }

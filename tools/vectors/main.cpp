@@ -71,17 +71,23 @@ int main() {
     dump_hex("Discovery ByeBye Message", std::vector<uint8_t>(buf.begin(), end_it));
 
     // Measurement ping
-    link::v1::MessageBuffer buf2;
+    link::v1::MessageBuffer buf_ping;
     auto ping_payload = discovery::makePayload(HostTime(microseconds(1000000)), PrevGHostTime(microseconds(500000)));
-    auto end_it2 = link::v1::pingMessage(ping_payload, buf2.begin());
-    dump_hex("Measurement Ping Message (HostTime=1s, PrevGHostTime=0.5s)", std::vector<uint8_t>(buf2.begin(), end_it2));
+    auto end_it_ping = link::v1::pingMessage(ping_payload, buf_ping.begin());
+    dump_hex("Measurement Ping Message (HostTime=1s, PrevGHostTime=0.5s)", std::vector<uint8_t>(buf_ping.begin(), end_it_ping));
 
     // Measurement pong
+    link::v1::MessageBuffer buf_pong;
     auto pong_payload = discovery::makePayload(SessionMembership{session_id}, GHostTime(microseconds(1000000)));
-    auto end_it3 = link::v1::pongMessage(pong_payload, buf2.begin());
+    auto end_it_pong = link::v1::pongMessage(pong_payload, buf_pong.begin());
+    
+    // Parse Ping Message to get payload begin
+    const auto result = link::v1::parseMessageHeader(buf_ping.begin(), end_it_ping);
+    const auto ping_payload_begin = result.second;
+    
     // Append ping payload for complete pong representation
-    end_it3 = std::copy(buf2.begin(), end_it2, end_it3);
-    dump_hex("Measurement Pong Message (GHostTime=1s, + PingPayload)", std::vector<uint8_t>(buf2.begin(), end_it3));
+    end_it_pong = std::copy(ping_payload_begin, end_it_ping, end_it_pong);
+    dump_hex("Measurement Pong Message (GHostTime=1s, + PingPayload)", std::vector<uint8_t>(buf_pong.begin(), end_it_pong));
 
     // Timeline math
     std::cout << "### Timeline Math\n\n";

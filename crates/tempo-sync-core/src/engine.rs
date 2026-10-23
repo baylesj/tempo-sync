@@ -94,6 +94,7 @@ pub struct Engine {
     pub interfaces: HashMap<InterfaceId, SocketAddrPlain>,
     pub peers: HashMap<NodeId, PeerState>,
     pub dump_packets: bool,
+    pub num_session_peers: u32,
     
     pub next_broadcast: HostTime,
 }
@@ -108,6 +109,7 @@ impl Engine {
             state: SessionState::default(),
             interfaces: HashMap::new(),
             peers: HashMap::new(),
+            num_session_peers: 0,
             next_broadcast: HostTime(0),
             dump_packets: false,
         }
@@ -128,7 +130,7 @@ impl Engine {
 
             for (&iface_id, mep4) in &self.interfaces {
                 let msg = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss, Some(*mep4), false);
-                if self.dump_packets { println!("SEND MULTICAST ALIVE: {:x?}", msg); }
+                if self.dump_packets { eprintln!("SEND MULTICAST ALIVE: {:x?}", msg); }
                 outputs.push(Output::Send {
                     iface_id,
                     to: SocketAddrPlain { ip: [224, 76, 78, 75], port: 20808 },
@@ -152,7 +154,7 @@ impl Engine {
                 peer.ping_timeouts += 1;
                 
                 let ping = serialize_measurement_ping(now, None);
-                if self.dump_packets { println!("SEND PING (INIT): {:x?}", ping); }
+                if self.dump_packets { eprintln!("SEND PING (INIT): {:x?}", ping); }
                 for &iface_id in self.interfaces.keys() {
                     outputs.push(Output::Send {
                         iface_id,
@@ -172,7 +174,6 @@ impl Engine {
         let old_len = self.peers.len();
         self.peers.retain(|_, p| p.last_seen.0 >= timeout.0);
         if self.peers.len() != old_len {
-            outputs.push(Output::NumPeersChanged(self.peers.len() as u32));
             self.resolve_session(now, outputs);
         }
         
@@ -193,12 +194,23 @@ impl Engine {
         if next_timer.0 != i64::MAX {
             outputs.push(Output::SetTimer { at: next_timer });
         }
+        
+        let mut session_peers = 0;
+        for peer in self.peers.values() {
+            if peer.session_id == Some(self.session_id) {
+                session_peers += 1;
+            }
+        }
+        if session_peers != self.num_session_peers {
+            self.num_session_peers = session_peers;
+            outputs.push(Output::NumPeersChanged(session_peers));
+        }
     }
 
     pub fn handle_packet(&mut self, iface_id: InterfaceId, from: SocketAddrPlain, bytes: &[u8], now: HostTime) -> Vec<Output> {
         let mut outputs = Vec::new();
         if !self.enabled { return outputs; }
-        if self.dump_packets { println!("RECV MSG: {:x?}", bytes); }
+        if self.dump_packets { eprintln!("RECV MSG: {:x?}", bytes); }
         if let Some(msg) = crate::wire::parse_message(bytes) {
             match msg {
                 Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id, mep4 }) => {
@@ -210,7 +222,7 @@ impl Engine {
                     let peer = self.peers.entry(node_id).or_insert_with(|| PeerState::new(from, now));
                     peer.last_seen = now;
                     peer.addr = mep4.unwrap_or(from);
-                    println!("UPDATED PEER ADDR TO port={}", peer.addr.port);
+                    // println!("UPDATED PEER ADDR TO port={}", peer.addr.port);
                     
                     if peer.timeline_ghost != timeline || peer.start_stop_ghost != start_stop || peer.session_id != session_id {
                         peer.timeline_ghost = timeline;
@@ -225,7 +237,7 @@ impl Engine {
                         ghost_ss.time = HostTime(ghost_ss.time.0.wrapping_add(self.session_offset));
                         let mep4 = self.interfaces.get(&iface_id).copied();
                         let resp = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss, mep4, true);
-                        if self.dump_packets { println!("SEND RESPONSE ALIVE: {:x?}", resp); }
+                        if self.dump_packets { eprintln!("SEND RESPONSE ALIVE: {:x?}", resp); }
                         outputs.push(Output::Send {
                             iface_id,
                             to: peer.addr,
@@ -234,7 +246,6 @@ impl Engine {
                     }
                     
                     if is_new {
-                        outputs.push(Output::NumPeersChanged(self.peers.len() as u32));
                     }
                     if needs_resolution {
                         self.resolve_session(now, &mut outputs);
@@ -242,15 +253,14 @@ impl Engine {
                 }
                 Message::Discovery(DiscoveryMsg::ByeBye { node_id }) => {
                     if self.peers.remove(&node_id).is_some() {
-                        outputs.push(Output::NumPeersChanged(self.peers.len() as u32));
                         self.resolve_session(now, &mut outputs);
                     }
                 }
                 Message::Measurement(MeasurementMsg::Ping { host_time: _, prev_ghost_time: _ }) => {
                     // Pong: `__gt` is our GhostTime
                     let our_ghost_time = HostTime(now.0.wrapping_add(self.session_offset));
-                    let pong = serialize_measurement_pong(&self.session_id, our_ghost_time, bytes);
-                    if self.dump_packets { println!("SEND PONG: {:x?}", pong); }
+                    let pong = serialize_measurement_pong(&self.session_id, our_ghost_time, &bytes[9..]);
+                    if self.dump_packets { eprintln!("SEND PONG: {:x?}", pong); }
                     outputs.push(Output::Send {
                         iface_id,
                         to: from,
@@ -283,7 +293,7 @@ impl Engine {
                                 } else {
                                     // Send immediate follow-up
                                     let ping = serialize_measurement_ping(now, Some(b_t2));
-                                    if self.dump_packets { println!("SEND PING: {:x?}", ping); }
+                                    if self.dump_packets { eprintln!("SEND PING: {:x?}", ping); }
                                     outputs.push(Output::Send {
                                         iface_id,
                                         to: peer.addr,
@@ -344,7 +354,6 @@ impl Engine {
                     });
                 }
                 self.peers.clear();
-                outputs.push(Output::NumPeersChanged(0));
             }
         }
         outputs
@@ -408,6 +417,8 @@ impl Engine {
         
         // Find best timeline in current session
         let mut best_tl = self.state.timeline.clone();
+        best_tl.time_origin = HostTime(best_tl.time_origin.0.wrapping_add(self.session_offset));
+        
         for peer in self.peers.values() {
             if peer.session_id == Some(self.session_id) {
                 if let Some(ref tl) = peer.timeline_ghost {

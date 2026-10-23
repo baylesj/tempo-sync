@@ -72,8 +72,8 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
                 match key {
                     b"tmln" if size == 24 => {
                         let tempo = TempoWire(i64::from_be_bytes(value[0..8].try_into().unwrap()));
-                        let time_origin = HostTime(i64::from_be_bytes(value[8..16].try_into().unwrap()));
-                        let beat_origin = MicroBeats(i64::from_be_bytes(value[16..24].try_into().unwrap()));
+                        let beat_origin = MicroBeats(i64::from_be_bytes(value[8..16].try_into().unwrap()));
+                        let time_origin = HostTime(i64::from_be_bytes(value[16..24].try_into().unwrap()));
                         timeline = Some(Timeline { tempo, beat_origin, time_origin });
                     }
                     b"stst" if size == 17 => {
@@ -91,7 +91,7 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
                         let mut ip = [0u8; 4]; ip.copy_from_slice(&value[0..4]);
                         let port = u16::from_be_bytes(value[4..6].try_into().unwrap());
                         mep4 = Some(crate::SocketAddrPlain { ip, port });
-                        println!("PARSED MEP4: ip={:?} port={}", ip, port);
+                        // println!("PARSED MEP4: ip={:?} port={}", ip, port);
                     }
                     _ => {}
                 }
@@ -129,24 +129,6 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
             }
         } else if msg_type == 2 {
             while offset + 8 <= bytes.len() {
-                if &bytes[offset..offset+8] == LINK_MAGIC {
-                    let mut inner_offset = offset + 9;
-                    while inner_offset + 8 <= bytes.len() {
-                        let inner_key = &bytes[inner_offset..inner_offset+4];
-                        let inner_size = u32::from_be_bytes(bytes[inner_offset+4..inner_offset+8].try_into().unwrap()) as usize;
-                        inner_offset += 8;
-                        if inner_offset + inner_size > bytes.len() { break; }
-                        let inner_val = &bytes[inner_offset..inner_offset+inner_size];
-                        match inner_key {
-                            b"__ht" if inner_size == 8 => ping_host_time = Some(HostTime(i64::from_be_bytes(inner_val.try_into().unwrap()))),
-                            b"_pgt" if inner_size == 8 => ping_prev_ghost_time = Some(HostTime(i64::from_be_bytes(inner_val.try_into().unwrap()))),
-                            _ => {}
-                        }
-                        inner_offset += inner_size;
-                    }
-                    break;
-                }
-
                 let key = &bytes[offset..offset+4];
                 let size = u32::from_be_bytes(bytes[offset+4..offset+8].try_into().unwrap()) as usize;
                 offset += 8;
@@ -159,6 +141,8 @@ pub fn parse_message(bytes: &[u8]) -> Option<Message> {
                         session_id = Some(NodeId(sess));
                     }
                     b"__gt" if size == 8 => ghost_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
+                    b"__ht" if size == 8 => ping_host_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
+                    b"_pgt" if size == 8 => ping_prev_ghost_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
                     _ => {}
                 }
                 offset += size;
@@ -183,8 +167,8 @@ pub fn serialize_discovery_alive(node_id: &NodeId, session_id: &NodeId, timeline
     out.extend_from_slice(b"tmln");
     out.extend_from_slice(&24u32.to_be_bytes());
     out.extend_from_slice(&timeline.tempo.0.to_be_bytes());
-    out.extend_from_slice(&timeline.time_origin.0.to_be_bytes());
     out.extend_from_slice(&timeline.beat_origin.0.to_be_bytes());
+    out.extend_from_slice(&timeline.time_origin.0.to_be_bytes());
 
     // SessionMembership
     out.extend_from_slice(b"sess");
@@ -308,9 +292,7 @@ mod tests {
 
     #[test]
     fn test_parse_measurement_pong() {
-        // ping packet is: _link_v1 01 __ht [8] 1000000
-        // pong packet wraps it: _link_v1 02 sess [8] 0807060504030201 __gt [8] 1000000 <ping>
-        let hex = "5f6c696e6b5f760102736573730000000808070605040302015f5f67740000000800000000000f42405f6c696e6b5f7601015f5f68740000000800000000000f4240";
+        let hex = "5f6c696e6b5f760102736573730000000808070605040302015f5f67740000000800000000000f42405f5f68740000000800000000000f4240";
         let bytes = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect::<Vec<u8>>();
         let msg = parse_message(&bytes).unwrap();
         match msg {

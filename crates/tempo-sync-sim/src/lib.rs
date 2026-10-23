@@ -41,7 +41,7 @@ impl Simulator {
     pub fn add_node(&mut self, node_id: NodeId, addr: SocketAddrPlain) {
         let mut engine = Engine::new(node_id);
         let iface = InterfaceId(1);
-        let outputs = engine.add_interface(iface, addr.ip);
+        let outputs = engine.add_interface(iface, addr);
         self.handle_outputs(node_id, outputs);
         let outputs = engine.set_enabled(true, HostTime(self.time));
         self.handle_outputs(node_id, outputs);
@@ -84,10 +84,10 @@ impl Simulator {
                     }
                     
                     let mut receive = false;
-                    if msg.to_addr.ip == [224, 76, 110, 107] {
+                    if msg.to_addr.ip == [224, 76, 78, 75] {
                         receive = true;
                     } else if let Some(ip) = target_engine.interfaces.get(&InterfaceId(1)) {
-                        if *ip == msg.to_addr.ip {
+                        if ip.ip == msg.to_addr.ip {
                             receive = true;
                         }
                     }

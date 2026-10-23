@@ -16,11 +16,13 @@ fn main() {
     let mut quantum = 4.0;
     let mut interval_ms = 100;
     let mut ifaces = Vec::new();
+    let mut dump = false;
 
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
             "--json" => is_json = true,
+            "--dump-packets" => dump = true,
             "--tempo" => {
                 i += 1;
                 if i < args.len() { tempo = args[i].parse().unwrap_or(tempo); }
@@ -50,10 +52,15 @@ fn main() {
         ifaces.push(Ipv4Addr::new(127, 0, 0, 1));
     }
 
-    let node_id = NodeId([0, 1, 2, 3, 4, 5, 6, 7]);
-    let runtime = Runtime::new(node_id, ifaces);
+    let node_id = NodeId(*b"TempoHut");
+    let mut runtime = Runtime::new(node_id, ifaces);
+    runtime.set_dump_packets(dump);
     let session = runtime.handle();
     let clock = Clock::new();
+
+    let mut state = session.capture_state().unwrap();
+    state.set_tempo(tempo, clock.now());
+    session.commit_state(state);
 
     thread::spawn(move || {
         runtime.run();
