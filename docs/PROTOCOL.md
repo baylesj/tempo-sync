@@ -125,6 +125,7 @@ Peers exchange pings and pongs to measure the clock offset between their local "
     newBeatOrigin = curClient.toBeats(atTime) - (atTime - hostBeatZero) / newTempo
     newTimeOrigin = hostBeatZero
     ```
+    *Note on Phase*: While `toBeats(hostBeatZero)` evaluates to `newBeatOrigin` (which may be fractional), Link calculates the app-facing session phase relative to `beatOrigin`. Specifically, the target phase at `time` is `phase(toBeats(time) - beatOrigin, quantum)`. Because `toBeats(newTimeOrigin) == newBeatOrigin`, the phase at `newTimeOrigin` is strictly `0`, perfectly aligning with the session grid.
   * **Committing a New Timeline**: When a client proposes a change (e.g., tempo change or forced beat), it updates its Client Timeline. To propagate this to the session, it produces a new Session Timeline (in Ghost Time):
     ```
     ghostBeat0 = xform.hostToGhost(client.timeOrigin)
@@ -149,15 +150,25 @@ Peers exchange pings and pongs to measure the clock offset between their local "
 A `Timeline` establishes a bijection between time and beats. Tempo is limited to `[20.0, 999.0]` BPM. Rounding to micro-beats is done via `std::llround()`.
 
 ### Core Formulas
-**Beat at Time:** `beats = beatOrigin + (time - timeOrigin) / tempo_micros_per_beat`
-**Time at Beat:** `time = timeOrigin + (beats - beatOrigin) * tempo_micros_per_beat`
+**Raw Beat at Time (Internal `toBeats`):** `raw_beats = beatOrigin + (time - timeOrigin) / tempo_micros_per_beat`
+**Raw Time at Beat (Internal `fromBeats`):** `time = timeOrigin + (raw_beats - beatOrigin) * tempo_micros_per_beat`
 
 **Phase at Time:**
 Given a `quantum` (e.g., 4.0 beats per bar):
 ```
-phase = (beats + quantumBins * quantum) % quantum
+phase(b, q) = (b + quantumBins * q) % q
 ```
-Where `quantumBins` (integer arithmetic) is `(abs(beats) + quantum) / quantum`. This mathematically robust flooring modulo ensures negative beats wrap correctly into the `[0, quantum)` range.
+Where `quantumBins` (integer arithmetic) is `(abs(b) + q) / q`. This mathematically robust flooring modulo ensures negative beats wrap correctly into the `[0, q)` range.
+
+**App-Facing Beat at Time (`beatAtTime`) and Phase Encoding:**
+The raw `toBeats` function preserves absolute beat continuity, but for session quantization, the phase must be locked to `timeOrigin` (which represents the time of beat 0 in the session). Link uses `toPhaseEncodedBeats` to find the nearest beat to `raw_beats` that respects this phase:
+```
+raw_beat = toBeats(time)
+target_phase_beat = raw_beat - beatOrigin
+closestInPhase(x, target, q) = nextPhaseMatch(x - q/2, target, q)
+app_beat = closestPhaseMatch(raw_beat, target_phase_beat, quantum)
+```
+Consequently, the app-facing `phaseAtTime` is effectively `phase(toBeats(time) - beatOrigin, quantum)`.
 
 **Quantized Launch (`requestBeatAtTime(beat, time, quantum)`):**
 * **Solo Mode (0 peers)**: Forces the timeline to map `time` exactly to `beat`.
@@ -170,8 +181,11 @@ Calculates the required shift to align the timeline without breaking phase:
 ```
 curBeatAtTime = toPhaseEncodedBeats(time, quantum)
 closestInPhase = closestPhaseMatch(curBeatAtTime, beat, quantum)
-timeDelta = timeAtBeat(closestInPhase - curBeatAtTime) - timeAtBeat(0)
+shift = closestInPhase - curBeatAtTime
+// shiftClientTimeline shifts the quantization grid (timeOrigin):
+timeDelta = timeAtBeat(shift) - timeAtBeat(0)
 timeOrigin -= timeDelta
+// Then magnitude is adjusted:
 beatOrigin += beat - closestInPhase
 ```
 
