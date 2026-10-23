@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::sync::{Arc, Mutex};
-use std::time::{Instant, Duration as StdDuration};
-use std::net::{UdpSocket, Ipv4Addr, SocketAddrV4, SocketAddr};
-use std::thread;
+use socket2::{Domain, Protocol, Socket, Type};
 use std::collections::HashMap;
-use socket2::{Socket, Domain, Type, Protocol};
-use tempo_sync_core::{Engine, Output, SessionState, HostTime, NodeId, InterfaceId, SocketAddrPlain};
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::{Duration as StdDuration, Instant};
+use tempo_sync_core::{
+    Engine, HostTime, InterfaceId, NodeId, Output, SessionState, SocketAddrPlain,
+};
 
 pub struct Clock {
     epoch: Instant,
@@ -21,7 +23,10 @@ impl Default for Clock {
 
 impl Clock {
     pub fn new() -> Self {
-        Clock { epoch: Instant::now(), offset_us: 0 }
+        Clock {
+            epoch: Instant::now(),
+            offset_us: 0,
+        }
     }
 
     pub fn now(&self) -> HostTime {
@@ -35,7 +40,10 @@ impl Clock {
             extern "C" {
                 fn clock_gettime(clk_id: i32, tp: *mut Timespec) -> i32;
             }
-            let mut ts = Timespec { tv_sec: 0, tv_nsec: 0 };
+            let mut ts = Timespec {
+                tv_sec: 0,
+                tv_nsec: 0,
+            };
             // CLOCK_MONOTONIC_RAW = 4
             unsafe {
                 if clock_gettime(4, &mut ts) == 0 {
@@ -107,24 +115,26 @@ impl Runtime {
         }
     }
 
-    pub fn set_dump_packets(&mut self, dump: bool) { self.engine.dump_packets = dump; }
+    pub fn set_dump_packets(&mut self, dump: bool) {
+        self.engine.dump_packets = dump;
+    }
 
     pub fn run(mut self) {
         let mut sockets: HashMap<InterfaceId, UdpSocket> = HashMap::new();
-        
+
         let now = self.clock.now();
         let mut next_timer = None;
         let mut outputs = self.engine.set_enabled(true, now);
-        
+
         // 1. Create the shared multicast receive socket using socket2
         let multi_sock = Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP)).unwrap();
         multi_sock.set_reuse_address(true).unwrap();
         multi_sock.set_reuse_port(true).unwrap();
-        
+
         let addr: SocketAddr = "0.0.0.0:20808".parse().unwrap();
         multi_sock.bind(&addr.into()).unwrap();
         multi_sock.set_nonblocking(true).unwrap();
-        
+
         let group_ip = Ipv4Addr::new(224, 76, 78, 75);
         for &ip in &self.ifaces {
             let _ = multi_sock.join_multicast_v4(&group_ip, &ip);
@@ -132,7 +142,7 @@ impl Runtime {
         multi_sock.set_multicast_loop_v4(true).unwrap();
 
         let multi_sock_std: UdpSocket = multi_sock.into();
-        
+
         let mcast_send_sock = UdpSocket::bind("0.0.0.0:0").unwrap();
         let mcast_send_sock2 = socket2::SockRef::from(&mcast_send_sock);
         mcast_send_sock2.set_multicast_loop_v4(true).unwrap();
@@ -148,7 +158,7 @@ impl Runtime {
                 let local_addr = sock.local_addr().unwrap();
                 let port = local_addr.port();
                 sockets.insert(id, sock);
-                
+
                 let mep4 = SocketAddrPlain {
                     ip: ip.octets(),
                     port,
@@ -161,19 +171,42 @@ impl Runtime {
             // Process outputs
             for out in outputs.drain(..) {
                 match out {
-                    Output::Send { iface_id, to, bytes } => {
+                    Output::Send {
+                        iface_id,
+                        to,
+                        bytes,
+                    } => {
                         let to_addr = SocketAddrV4::new(Ipv4Addr::from(to.ip), to.port);
                         if to.ip == [224, 76, 78, 75] {
                             // Send multicast through the specific interface's socket
                             let ip = self.ifaces[iface_id.0 as usize];
                             mcast_send_sock2.set_multicast_if_v4(&ip).unwrap();
                             mcast_send_sock.set_multicast_ttl_v4(5).unwrap();
-                            if self.engine.dump_packets { eprintln!("TX to {}: {}", to_addr, bytes.iter().map(|b| format!("{:02X}", b)).collect::<String>()); }
+                            if self.engine.dump_packets {
+                                eprintln!(
+                                    "TX to {}: {}",
+                                    to_addr,
+                                    bytes
+                                        .iter()
+                                        .map(|b| format!("{:02X}", b))
+                                        .collect::<String>()
+                                );
+                            }
                             let _ = mcast_send_sock.send_to(&bytes, to_addr);
                         } else {
                             // Unicast
                             if let Some(sock) = sockets.get(&iface_id) {
-                                if self.engine.dump_packets { eprintln!("TX to {}: {}", to_addr, bytes.iter().map(|b| format!("{:02X}", b)).collect::<String>()); } let _ = sock.send_to(&bytes, to_addr);
+                                if self.engine.dump_packets {
+                                    eprintln!(
+                                        "TX to {}: {}",
+                                        to_addr,
+                                        bytes
+                                            .iter()
+                                            .map(|b| format!("{:02X}", b))
+                                            .collect::<String>()
+                                    );
+                                }
+                                let _ = sock.send_to(&bytes, to_addr);
                             }
                         }
                     }
@@ -208,7 +241,7 @@ impl Runtime {
             thread::sleep(sleep_time);
 
             let now = self.clock.now();
-            
+
             while let Ok(state) = self.rx.try_recv() {
                 outputs.extend(self.engine.commit_app_state(state, now));
             }
@@ -216,9 +249,21 @@ impl Runtime {
             let mut buf = [0u8; 2048];
             for (&id, sock) in sockets.iter() {
                 while let Ok((len, from)) = sock.recv_from(&mut buf) {
-                    if self.engine.dump_packets { eprintln!("RX from {}: {}", from, buf[..len].iter().map(|b| format!("{:02X}", b)).collect::<String>()); }
+                    if self.engine.dump_packets {
+                        eprintln!(
+                            "RX from {}: {}",
+                            from,
+                            buf[..len]
+                                .iter()
+                                .map(|b| format!("{:02X}", b))
+                                .collect::<String>()
+                        );
+                    }
                     if let std::net::SocketAddr::V4(v4) = from {
-                        let plain = SocketAddrPlain { ip: v4.ip().octets(), port: v4.port() };
+                        let plain = SocketAddrPlain {
+                            ip: v4.ip().octets(),
+                            port: v4.port(),
+                        };
                         outputs.extend(self.engine.handle_packet(id, plain, &buf[..len], now));
                     }
                 }
@@ -227,14 +272,31 @@ impl Runtime {
             // Pass interface ID 0 as a dummy, or attempt to find the right one.
             // Since we bound 0.0.0.0, we just process it.
             while let Ok((len, from)) = multi_sock_std.recv_from(&mut buf) {
-                if self.engine.dump_packets { eprintln!("RX from {}: {}", from, buf[..len].iter().map(|b| format!("{:02X}", b)).collect::<String>()); }
+                if self.engine.dump_packets {
+                    eprintln!(
+                        "RX from {}: {}",
+                        from,
+                        buf[..len]
+                            .iter()
+                            .map(|b| format!("{:02X}", b))
+                            .collect::<String>()
+                    );
+                }
                 if let std::net::SocketAddr::V4(v4) = from {
-                    let plain = SocketAddrPlain { ip: v4.ip().octets(), port: v4.port() };
+                    let plain = SocketAddrPlain {
+                        ip: v4.ip().octets(),
+                        port: v4.port(),
+                    };
                     // Default to InterfaceId(0) for incoming multicasts
-                    outputs.extend(self.engine.handle_packet(InterfaceId(0), plain, &buf[..len], now));
+                    outputs.extend(self.engine.handle_packet(
+                        InterfaceId(0),
+                        plain,
+                        &buf[..len],
+                        now,
+                    ));
                 }
             }
-            
+
             if let Some(t) = next_timer {
                 if now.0 >= t.0 {
                     outputs.extend(self.engine.handle_timer(now));

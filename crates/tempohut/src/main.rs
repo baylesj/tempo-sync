@@ -6,8 +6,8 @@ use std::net::Ipv4Addr;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
-use tempo_sync_std::{Runtime, Clock};
-use tempo_sync_core::{NodeId, HostTime};
+use tempo_sync_core::{HostTime, NodeId};
+use tempo_sync_std::{Clock, Runtime};
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -22,28 +22,38 @@ fn main() {
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
+            "--help" | "-h" => {
+                println!("Usage: tempohut [--json] [--tempo <bpm>] [--quantum <n>] [--interval-ms <n>] [--iface <ipv4>]...");
+                return;
+            }
             "--json" => is_json = true,
             "--dump-packets" => dump = true,
             "--tempo" => {
                 i += 1;
-                if i < args.len() { tempo = args[i].parse().unwrap_or(tempo); }
-            },
+                if i < args.len() {
+                    tempo = args[i].parse().unwrap_or(tempo);
+                }
+            }
             "--quantum" => {
                 i += 1;
-                if i < args.len() { quantum = args[i].parse().unwrap_or(quantum); }
-            },
+                if i < args.len() {
+                    quantum = args[i].parse().unwrap_or(quantum);
+                }
+            }
             "--interval-ms" => {
                 i += 1;
-                if i < args.len() { interval_ms = args[i].parse().unwrap_or(interval_ms); }
-            },
+                if i < args.len() {
+                    interval_ms = args[i].parse().unwrap_or(interval_ms);
+                }
+            }
             "--iface" => {
                 i += 1;
-                if i < args.len() { 
+                if i < args.len() {
                     if let Ok(ip) = args[i].parse::<Ipv4Addr>() {
                         ifaces.push(ip);
                     }
                 }
-            },
+            }
             "--node-id-hex" => {
                 i += 1;
                 if i < args.len() {
@@ -51,7 +61,7 @@ fn main() {
                     if hex.len() == 16 {
                         let mut arr = [0u8; 8];
                         for j in 0..8 {
-                            if let Ok(b) = u8::from_str_radix(&hex[j*2..j*2+2], 16) {
+                            if let Ok(b) = u8::from_str_radix(&hex[j * 2..j * 2 + 2], 16) {
                                 arr[j] = b;
                             }
                         }
@@ -93,13 +103,11 @@ fn main() {
     });
 
     let (tx, rx) = mpsc::channel();
-    
+
     thread::spawn(move || {
         let stdin = io::stdin();
-        for line in stdin.lock().lines() {
-            if let Ok(l) = line {
-                let _ = tx.send(l);
-            }
+        for l in stdin.lock().lines().map_while(Result::ok) {
+            let _ = tx.send(l);
         }
     });
 
@@ -107,15 +115,19 @@ fn main() {
         match rx.recv_timeout(Duration::from_millis(interval_ms)) {
             Ok(line) => {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if parts.is_empty() { continue; }
-                
+                if parts.is_empty() {
+                    continue;
+                }
+
                 let mut state = session.capture_state().unwrap();
                 let now = clock.now();
                 let mut ack = "";
 
                 match parts[0] {
                     "quit" => {
-                        if is_json { println!("{{\"ack\": \"quit\"}}"); }
+                        if is_json {
+                            println!("{{\"ack\": \"quit\"}}");
+                        }
                         std::process::exit(0);
                     }
                     "tempo" if parts.len() > 1 => {
@@ -136,14 +148,18 @@ fn main() {
                         ack = "stop";
                     }
                     "beat" if parts.len() > 3 && parts[2] == "at" => {
-                        if let (Ok(beat), Ok(time)) = (parts[1].parse::<f64>(), parts[3].parse::<i64>()) {
+                        if let (Ok(beat), Ok(time)) =
+                            (parts[1].parse::<f64>(), parts[3].parse::<i64>())
+                        {
                             state.request_beat_at_time(HostTime(time), beat, quantum);
                             session.commit_state(state);
                             ack = "beat";
                         }
                     }
                     "force" if parts.len() > 3 && parts[2] == "at" => {
-                        if let (Ok(beat), Ok(time)) = (parts[1].parse::<f64>(), parts[3].parse::<i64>()) {
+                        if let (Ok(beat), Ok(time)) =
+                            (parts[1].parse::<f64>(), parts[3].parse::<i64>())
+                        {
                             state.force_beat_at_time(HostTime(time), beat);
                             session.commit_state(state);
                             ack = "force";

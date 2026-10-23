@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::time::{HostTime, Tempo, Beats, MicroBeats, TempoWire};
+use crate::time::{Beats, HostTime, MicroBeats, Tempo, TempoWire};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Timeline {
@@ -49,7 +49,9 @@ impl SessionState {
     pub fn phase_at_time(&self, time: HostTime, quantum: f64) -> f64 {
         let beat = self.beat_at_time(time, quantum);
         let q = quantum.abs();
-        if q == 0.0 { return 0.0; }
+        if q == 0.0 {
+            return 0.0;
+        }
         let quantum_bins = (beat.abs() + q) / q;
         let quantum_bins_int = quantum_bins.floor();
         (beat + quantum_bins_int * q) % q
@@ -107,13 +109,13 @@ mod tests {
 
         // beatAtTime(2000000us) = 4
         assert_eq!(state.beat_at_time(HostTime(2000000), 4.0), 4.0);
-        
+
         // phaseAtTime(2000000us, 4.0) = 0
         assert_eq!(state.phase_at_time(HostTime(2000000), 4.0), 0.0);
-        
+
         // timeAtBeat(4.0) = 2000000us
         assert_eq!(state.time_at_beat(4.0, 4.0), HostTime(2000000));
-        
+
         // phase(-1.0, 4.0) = 3
         let beat: f64 = -1.0;
         let q = 4.0;
@@ -140,7 +142,9 @@ mod tests {
 
 impl SessionState {
     pub fn next_phase_match(cur: Beats, target: Beats, q: f64) -> Beats {
-        if q == 0.0 { return target; }
+        if q == 0.0 {
+            return target;
+        }
         let diff = cur - target;
         let bins = diff / q;
         let ceil_bins = bins.ceil();
@@ -167,7 +171,7 @@ mod more_tests {
         state.timeline.time_origin = HostTime(0);
 
         state.request_beat_at_time_quantized(HostTime(3000000), 1.0, 4.0);
-        
+
         assert_eq!(state.timeline.beat_origin.to_beats(), -8.0);
         assert_eq!(state.timeline.time_origin.0, 0);
         assert_eq!(state.beat_at_time(HostTime(4500000), 4.0), 1.0);

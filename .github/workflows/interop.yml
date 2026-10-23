@@ -9,6 +9,7 @@ on:
 jobs:
   interop:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -39,9 +40,9 @@ jobs:
 
       - name: Run interop test harness
         run: |
-          if [ -f "Cargo.toml" ] && cargo run -p tempohut -- --help >/dev/null 2>&1; then
+          if [ -x "./target/debug/tempohut" ]; then
             echo "Running full interop against Rust tempohut..."
-            ./tools/interop/run_interop.py
+            ./tools/interop/run_interop.py --tempohut-cmd "./target/debug/tempohut --json --interval-ms 50"
           else
             echo "Running interop in standalone C++ oracle mode (--skip-rust)..."
             ./tools/interop/run_interop.py --skip-rust

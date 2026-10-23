@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::HashMap;
 use crate::time::HostTime;
-use crate::timeline::{SessionState, Timeline, StartStopState};
-use crate::wire::{Message, DiscoveryMsg, MeasurementMsg, NodeId, serialize_discovery_alive, serialize_discovery_byebye, serialize_measurement_ping, serialize_measurement_pong};
+use crate::timeline::{SessionState, StartStopState, Timeline};
+use crate::wire::{
+    serialize_discovery_alive, serialize_discovery_byebye, serialize_measurement_ping,
+    serialize_measurement_pong, DiscoveryMsg, MeasurementMsg, Message, NodeId,
+};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct InterfaceId(pub u32);
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct SocketAddrPlain {
     pub ip: [u8; 4],
     pub port: u16,
@@ -54,7 +55,7 @@ pub struct PeerState {
     pub start_stop_ghost: Option<StartStopState>,
     pub last_seen: HostTime,
     pub addr: SocketAddrPlain,
-    
+
     pub offsets: Vec<i64>, // Up to 100 samples
     pub next_ping_time: HostTime,
     pub ping_timeouts: u32,
@@ -75,9 +76,11 @@ impl PeerState {
             measuring: true,
         }
     }
-    
+
     pub fn median_offset(&self) -> i64 {
-        if self.offsets.is_empty() { return 0; }
+        if self.offsets.is_empty() {
+            return 0;
+        }
         let mut sorted = self.offsets.clone();
         sorted.sort_unstable();
         sorted[sorted.len() / 2]
@@ -90,12 +93,12 @@ pub struct Engine {
     pub session_id: NodeId,
     pub session_offset: i64,
     pub state: SessionState, // In HostTime
-    
+
     pub interfaces: HashMap<InterfaceId, SocketAddrPlain>,
     pub peers: HashMap<NodeId, PeerState>,
     pub dump_packets: bool,
     pub num_session_peers: u32,
-    
+
     pub next_broadcast: HostTime,
 }
 
@@ -116,45 +119,62 @@ impl Engine {
     }
 
     fn produce_outputs(&mut self, now: HostTime, outputs: &mut Vec<Output>) {
-        if !self.enabled { return; }
-        
+        if !self.enabled {
+            return;
+        }
+
         let mut next_timer = HostTime(i64::MAX);
 
         // Discovery broadcast
         if now.0 >= self.next_broadcast.0 {
             // Serialize in Ghost Time
             let mut ghost_tl = self.state.timeline.clone();
-            ghost_tl.time_origin = HostTime(ghost_tl.time_origin.0.wrapping_add(self.session_offset));
+            ghost_tl.time_origin =
+                HostTime(ghost_tl.time_origin.0.wrapping_add(self.session_offset));
             let mut ghost_ss = self.state.start_stop.clone();
             ghost_ss.time = HostTime(ghost_ss.time.0.wrapping_add(self.session_offset));
 
             for (&iface_id, mep4) in &self.interfaces {
-                let msg = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss, Some(*mep4), false);
-                if self.dump_packets { eprintln!("SEND MULTICAST ALIVE: {:x?}", msg); }
+                let msg = serialize_discovery_alive(
+                    &self.node_id,
+                    &self.session_id,
+                    &ghost_tl,
+                    &ghost_ss,
+                    Some(*mep4),
+                    false,
+                );
+                if self.dump_packets {
+                    eprintln!("SEND MULTICAST ALIVE: {:x?}", msg);
+                }
                 outputs.push(Output::Send {
                     iface_id,
-                    to: SocketAddrPlain { ip: [224, 76, 78, 75], port: 20808 },
+                    to: SocketAddrPlain {
+                        ip: [224, 76, 78, 75],
+                        port: 20808,
+                    },
                     bytes: msg,
                 });
             }
             // "A hard floor of 50ms is enforced... nominal interval is 250ms"
-            self.next_broadcast = HostTime(now.0 + 250_000); 
+            self.next_broadcast = HostTime(now.0 + 250_000);
         }
         if self.next_broadcast.0 < next_timer.0 {
             next_timer = self.next_broadcast;
         }
 
         // Pings
-        for (_peer_id, peer) in self.peers.iter_mut() {
+        for peer in self.peers.values_mut() {
             if peer.measuring && now.0 >= peer.next_ping_time.0 {
                 if peer.ping_timeouts >= 5 {
                     peer.measuring = false;
                     continue;
                 }
                 peer.ping_timeouts += 1;
-                
+
                 let ping = serialize_measurement_ping(now, None);
-                if self.dump_packets { eprintln!("SEND PING (INIT): {:x?}", ping); }
+                if self.dump_packets {
+                    eprintln!("SEND PING (INIT): {:x?}", ping);
+                }
                 for &iface_id in self.interfaces.keys() {
                     outputs.push(Output::Send {
                         iface_id,
@@ -168,7 +188,7 @@ impl Engine {
                 next_timer = peer.next_ping_time;
             }
         }
-        
+
         // Peer timeouts (6s)
         let timeout = HostTime(now.0 - 6_000_000);
         let old_len = self.peers.len();
@@ -176,7 +196,7 @@ impl Engine {
         if self.peers.len() != old_len {
             self.resolve_session(now, outputs);
         }
-        
+
         // Wakeup for next timeout
         let mut min_last_seen = HostTime(i64::MAX);
         for peer in self.peers.values() {
@@ -194,7 +214,7 @@ impl Engine {
         if next_timer.0 != i64::MAX {
             outputs.push(Output::SetTimer { at: next_timer });
         }
-        
+
         let mut session_peers = 0;
         for peer in self.peers.values() {
             if peer.session_id == Some(self.session_id) {
@@ -207,19 +227,39 @@ impl Engine {
         }
     }
 
-    pub fn handle_packet(&mut self, iface_id: InterfaceId, from: SocketAddrPlain, bytes: &[u8], now: HostTime) -> Vec<Output> {
+    pub fn handle_packet(
+        &mut self,
+        iface_id: InterfaceId,
+        from: SocketAddrPlain,
+        bytes: &[u8],
+        now: HostTime,
+    ) -> Vec<Output> {
         let mut outputs = Vec::new();
-        if !self.enabled { return outputs; }
-        if self.dump_packets { eprintln!("RECV MSG: {:x?}", bytes); }
+        if !self.enabled {
+            return outputs;
+        }
+        if self.dump_packets {
+            eprintln!("RECV MSG: {:x?}", bytes);
+        }
         if let Some(msg) = crate::wire::parse_message(bytes) {
             match msg {
-                Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id, mep4 }) => {
-                    if node_id == self.node_id { return outputs; } // Ignore self
-                    
-                    let is_new = !self.peers.contains_key(&node_id);
+                Message::Discovery(DiscoveryMsg::Alive {
+                    node_id,
+                    timeline,
+                    start_stop,
+                    session_id,
+                    mep4,
+                }) => {
+                    if node_id == self.node_id {
+                        return outputs;
+                    } // Ignore self
+
                     let mut needs_resolution = false;
 
-                    let peer = self.peers.entry(node_id).or_insert_with(|| PeerState::new(from, now));
+                    let peer = self
+                        .peers
+                        .entry(node_id)
+                        .or_insert_with(|| PeerState::new(from, now));
                     peer.last_seen = now;
                     peer.addr = mep4.unwrap_or(from);
 
@@ -231,29 +271,40 @@ impl Engine {
                         peer.next_ping_time = now;
                     }
 
-                    if peer.timeline_ghost != timeline || peer.start_stop_ghost != start_stop || session_changed {
+                    if peer.timeline_ghost != timeline
+                        || peer.start_stop_ghost != start_stop
+                        || session_changed
+                    {
                         peer.timeline_ghost = timeline;
                         peer.start_stop_ghost = start_stop;
                         peer.session_id = session_id;
                         needs_resolution = !peer.offsets.is_empty();
-                        
+
                         // Send Response
                         let mut ghost_tl = self.state.timeline.clone();
-                        ghost_tl.time_origin = HostTime(ghost_tl.time_origin.0.wrapping_add(self.session_offset));
+                        ghost_tl.time_origin =
+                            HostTime(ghost_tl.time_origin.0.wrapping_add(self.session_offset));
                         let mut ghost_ss = self.state.start_stop.clone();
                         ghost_ss.time = HostTime(ghost_ss.time.0.wrapping_add(self.session_offset));
                         let mep4 = self.interfaces.get(&iface_id).copied();
-                        let resp = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss, mep4, true);
-                        if self.dump_packets { eprintln!("SEND RESPONSE ALIVE: {:x?}", resp); }
+                        let resp = serialize_discovery_alive(
+                            &self.node_id,
+                            &self.session_id,
+                            &ghost_tl,
+                            &ghost_ss,
+                            mep4,
+                            true,
+                        );
+                        if self.dump_packets {
+                            eprintln!("SEND RESPONSE ALIVE: {:x?}", resp);
+                        }
                         outputs.push(Output::Send {
                             iface_id,
                             to: peer.addr,
                             bytes: resp,
                         });
                     }
-                    
-                    if is_new {
-                    }
+
                     if needs_resolution {
                         self.resolve_session(now, &mut outputs);
                     }
@@ -263,18 +314,29 @@ impl Engine {
                         self.resolve_session(now, &mut outputs);
                     }
                 }
-                Message::Measurement(MeasurementMsg::Ping { host_time: _, prev_ghost_time: _ }) => {
+                Message::Measurement(MeasurementMsg::Ping {
+                    host_time: _,
+                    prev_ghost_time: _,
+                }) => {
                     // Pong: `__gt` is our GhostTime
                     let our_ghost_time = HostTime(now.0.wrapping_add(self.session_offset));
-                    let pong = serialize_measurement_pong(&self.session_id, our_ghost_time, &bytes[9..]);
-                    if self.dump_packets { eprintln!("SEND PONG: {:x?}", pong); }
+                    let pong =
+                        serialize_measurement_pong(&self.session_id, our_ghost_time, &bytes[9..]);
+                    if self.dump_packets {
+                        eprintln!("SEND PONG: {:x?}", pong);
+                    }
                     outputs.push(Output::Send {
                         iface_id,
                         to: from,
                         bytes: pong,
                     });
                 }
-                Message::Measurement(MeasurementMsg::Pong { session_id, ghost_time: b_t2, ping_host_time: a_t2, ping_prev_ghost_time: prev_ghost_time }) => {
+                Message::Measurement(MeasurementMsg::Pong {
+                    session_id,
+                    ghost_time: b_t2,
+                    ping_host_time: a_t2,
+                    ping_prev_ghost_time: prev_ghost_time,
+                }) => {
                     {
                         let a_t3 = now;
                         let offset = if let Some(b_t1) = prev_ghost_time {
@@ -284,12 +346,15 @@ impl Engine {
                         } else {
                             b_t2.0.wrapping_sub((a_t3.0.wrapping_add(a_t2.0)) / 2)
                         };
-                        
+
                         let mut found_node_id = None;
                         for (id, peer) in &self.peers {
-                            if peer.addr == from { found_node_id = Some(*id); break; }
+                            if peer.addr == from {
+                                found_node_id = Some(*id);
+                                break;
+                            }
                         }
-                        
+
                         if let Some(id) = found_node_id {
                             let peer = self.peers.get_mut(&id).unwrap();
                             if let Some(pong_sess) = session_id {
@@ -306,7 +371,9 @@ impl Engine {
                                 } else {
                                     // Send immediate follow-up
                                     let ping = serialize_measurement_ping(now, Some(b_t2));
-                                    if self.dump_packets { eprintln!("SEND PING: {:x?}", ping); }
+                                    if self.dump_packets {
+                                        eprintln!("SEND PING: {:x?}", ping);
+                                    }
                                     outputs.push(Output::Send {
                                         iface_id,
                                         to: peer.addr,
@@ -323,7 +390,7 @@ impl Engine {
                 }
             }
         }
-        
+
         self.produce_outputs(now, &mut outputs);
         outputs
     }
@@ -351,13 +418,20 @@ impl Engine {
                 if state.timeline.beat_origin.0 <= max_bo {
                     let new_bo = max_bo + 1_000_000;
                     let delta_mb = new_bo - state.timeline.beat_origin.0;
-                    let delta_us = ((delta_mb as i128 * state.timeline.tempo.0 as i128) / 1_000_000) as i64;
+                    let delta_us =
+                        ((delta_mb as i128 * state.timeline.tempo.0 as i128) / 1_000_000) as i64;
                     state.timeline.beat_origin = crate::time::MicroBeats(new_bo);
-                    state.timeline.time_origin = HostTime(state.timeline.time_origin.0.wrapping_add(delta_us));
+                    state.timeline.time_origin =
+                        HostTime(state.timeline.time_origin.0.wrapping_add(delta_us));
                 }
             }
             if state.start_stop != self.state.start_stop {
-                let mut max_ss_ghost = self.state.start_stop.time.0.wrapping_add(self.session_offset);
+                let mut max_ss_ghost = self
+                    .state
+                    .start_stop
+                    .time
+                    .0
+                    .wrapping_add(self.session_offset);
                 for peer in self.peers.values() {
                     if peer.session_id == Some(self.session_id) {
                         if let Some(ref ss) = peer.start_stop_ghost {
@@ -369,12 +443,15 @@ impl Engine {
                 }
                 let committed_ss_ghost = state.start_stop.time.0.wrapping_add(self.session_offset);
                 if committed_ss_ghost <= max_ss_ghost {
-                    state.start_stop.time = HostTime((max_ss_ghost + 1).wrapping_sub(self.session_offset));
+                    state.start_stop.time =
+                        HostTime((max_ss_ghost + 1).wrapping_sub(self.session_offset));
                 }
             }
             self.state = state;
-            outputs.push(Output::StateChanged { state: self.state.clone() });
-            
+            outputs.push(Output::StateChanged {
+                state: self.state.clone(),
+            });
+
             if self.enabled {
                 self.next_broadcast = now;
                 self.produce_outputs(now, &mut outputs);
@@ -394,7 +471,9 @@ impl Engine {
                 }
                 if self.state.timeline.time_origin.0 == 0 {
                     self.state.timeline.time_origin = now;
-                    outputs.push(Output::StateChanged { state: self.state.clone() });
+                    outputs.push(Output::StateChanged {
+                        state: self.state.clone(),
+                    });
                 }
                 self.next_broadcast = now;
                 self.produce_outputs(now, &mut outputs);
@@ -403,7 +482,10 @@ impl Engine {
                 for &iface_id in self.interfaces.keys() {
                     outputs.push(Output::Send {
                         iface_id,
-                        to: SocketAddrPlain { ip: [224, 76, 78, 75], port: 20808 },
+                        to: SocketAddrPlain {
+                            ip: [224, 76, 78, 75],
+                            port: 20808,
+                        },
                         bytes: msg.clone(),
                     });
                 }
@@ -413,7 +495,11 @@ impl Engine {
         outputs
     }
 
-    pub fn add_interface(&mut self, iface_id: InterfaceId, local_addr: SocketAddrPlain) -> Vec<Output> {
+    pub fn add_interface(
+        &mut self,
+        iface_id: InterfaceId,
+        local_addr: SocketAddrPlain,
+    ) -> Vec<Output> {
         let outputs = Vec::new();
         self.interfaces.insert(iface_id, local_addr);
         // Note: join multicast logic handled outside, engine shouldn't emit OpenUnicast if it already receives the port.
@@ -424,8 +510,13 @@ impl Engine {
         self.interfaces.remove(&iface_id);
         Vec::new()
     }
-    
-    pub fn handle_io_error(&mut self, iface_id: InterfaceId, _error: IoErrorKind, _now: HostTime) -> Vec<Output> {
+
+    pub fn handle_io_error(
+        &mut self,
+        iface_id: InterfaceId,
+        _error: IoErrorKind,
+        _now: HostTime,
+    ) -> Vec<Output> {
         self.interfaces.remove(&iface_id);
         Vec::new()
     }
@@ -434,17 +525,17 @@ impl Engine {
         let mut best_session = self.session_id;
         let mut best_offset = self.session_offset;
         let mut our_ghost_time = now.0.wrapping_add(self.session_offset);
-        
+
         let mut changed = false;
 
-        for (_id, peer) in &self.peers {
+        for peer in self.peers.values() {
             if peer.offsets.is_empty() {
                 continue;
             }
             if let Some(peer_sess) = peer.session_id {
                 let peer_offset = peer.median_offset();
                 let peer_ghost_time = now.0.wrapping_add(peer_offset);
-                
+
                 if peer_sess == best_session {
                     if best_session != self.node_id && (best_offset - peer_offset).abs() > 500 {
                         best_offset = peer_offset;
@@ -457,15 +548,12 @@ impl Engine {
                 let diff = peer_ghost_time.wrapping_sub(our_ghost_time);
                 let older = diff > 500_000;
                 let within_eps = diff.abs() <= 500_000;
-                
-                let win = if older {
-                    true
-                } else if within_eps && Self::compare_session_ids(&peer_sess, &best_session) == std::cmp::Ordering::Less {
-                    true // Lexicographically smaller wins
-                } else {
-                    false
-                };
-                
+
+                let win = older
+                    || (within_eps
+                        && Self::compare_session_ids(&peer_sess, &best_session)
+                            == std::cmp::Ordering::Less);
+
                 if win {
                     best_session = peer_sess;
                     best_offset = peer_offset;
@@ -484,7 +572,7 @@ impl Engine {
             self.session_offset = best_offset;
             changed = true;
         }
-        
+
         // Find best timeline in current session
         let mut best_tl = if changed_session {
             None
@@ -493,7 +581,7 @@ impl Engine {
             tl.time_origin = HostTime(tl.time_origin.0.wrapping_add(self.session_offset));
             Some(tl)
         };
-        
+
         for peer in self.peers.values() {
             if peer.session_id == Some(self.session_id) {
                 if let Some(ref tl) = peer.timeline_ghost {
@@ -504,10 +592,11 @@ impl Engine {
                 }
             }
         }
-        
+
         if let Some(tl) = best_tl {
             let mut best_tl_host = tl;
-            best_tl_host.time_origin = HostTime(best_tl_host.time_origin.0.wrapping_sub(self.session_offset));
+            best_tl_host.time_origin =
+                HostTime(best_tl_host.time_origin.0.wrapping_sub(self.session_offset));
             if best_tl_host != self.state.timeline {
                 self.state.timeline = best_tl_host;
                 changed = true;
@@ -522,7 +611,7 @@ impl Engine {
             ss.time = HostTime(ss.time.0.wrapping_add(self.session_offset));
             Some(ss)
         };
-        
+
         for peer in self.peers.values() {
             if peer.session_id == Some(self.session_id) {
                 if let Some(ref ss) = peer.start_stop_ghost {
@@ -533,7 +622,7 @@ impl Engine {
                 }
             }
         }
-        
+
         if let Some(ss) = best_ss {
             let mut best_ss_host = ss;
             best_ss_host.time = HostTime(best_ss_host.time.0.wrapping_sub(self.session_offset));
@@ -544,11 +633,13 @@ impl Engine {
         }
 
         if changed {
-            outputs.push(Output::StateChanged { state: self.state.clone() });
+            outputs.push(Output::StateChanged {
+                state: self.state.clone(),
+            });
             self.next_broadcast = now; // Broadcast ASAP
         }
     }
-    
+
     fn compare_session_ids(a: &NodeId, b: &NodeId) -> std::cmp::Ordering {
         a.0.cmp(&b.0)
     }
