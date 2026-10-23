@@ -22,6 +22,7 @@
 #include <ableton/link/NodeState.hpp>
 #include <ableton/link/Timeline.hpp>
 #include <ableton/link/Phase.hpp>
+#include <ableton/link/PeerState.hpp>
 #include <ableton/link/PayloadEntries.hpp>
 
 using namespace ableton;
@@ -55,11 +56,16 @@ int main() {
     state.timeline = timeline;
     state.startStopState = stst;
 
-    auto payload = toPayload(state);
+    PeerState peer_state;
+    peer_state.nodeState = state;
+    peer_state.measurementEndpoint = discovery::UdpEndpoint(discovery::IpAddressV4(0xC0A80105), 20808); // 192.168.1.5:20808
+    peer_state.audioEndpoint = discovery::UdpEndpoint(discovery::IpAddressV4(0xC0A80105), 20809);
+
+    auto payload = toPayload(peer_state);
     
     discovery::v1::MessageBuffer buf;
     auto end_it = discovery::v1::aliveMessage(node_id, 5, payload, buf.begin());
-    dump_hex("Discovery Alive Message", std::vector<uint8_t>(buf.begin(), end_it));
+    dump_hex("Discovery Alive Message (with Endpoints)", std::vector<uint8_t>(buf.begin(), end_it));
 
     end_it = discovery::v1::byeByeMessage(node_id, buf.begin());
     dump_hex("Discovery ByeBye Message", std::vector<uint8_t>(buf.begin(), end_it));
@@ -68,14 +74,14 @@ int main() {
     link::v1::MessageBuffer buf2;
     auto ping_payload = discovery::makePayload(HostTime(microseconds(1000000)), PrevGHostTime(microseconds(500000)));
     auto end_it2 = link::v1::pingMessage(ping_payload, buf2.begin());
-    dump_hex("Measurement Ping Message", std::vector<uint8_t>(buf2.begin(), end_it2));
+    dump_hex("Measurement Ping Message (HostTime=1s, PrevGHostTime=0.5s)", std::vector<uint8_t>(buf2.begin(), end_it2));
 
     // Measurement pong
     auto pong_payload = discovery::makePayload(SessionMembership{session_id}, GHostTime(microseconds(1000000)));
     auto end_it3 = link::v1::pongMessage(pong_payload, buf2.begin());
     // Append ping payload for complete pong representation
     end_it3 = std::copy(buf2.begin(), end_it2, end_it3);
-    dump_hex("Measurement Pong Message", std::vector<uint8_t>(buf2.begin(), end_it3));
+    dump_hex("Measurement Pong Message (GHostTime=1s, + PingPayload)", std::vector<uint8_t>(buf2.begin(), end_it3));
 
     // Timeline math
     std::cout << "### Timeline Math\n\n";
@@ -90,6 +96,27 @@ int main() {
     std::cout << "- `phase(-1.0, 4.0)` = " << phase(Beats(-1.0), Beats(4.0)).floating() << "\n";
     std::cout << "- `phase(-5.0, 4.0)` = " << phase(Beats(-5.0), Beats(4.0)).floating() << "\n";
     std::cout << "- `phase(5.0, 4.0)` = " << phase(Beats(5.0), Beats(4.0)).floating() << "\n";
+
+    // Request beat at time with respect quantum (session mode)
+    std::cout << "\nAfter `requestBeatAtTime(1.0, 3000000us, 4.0)` in session mode (respects quantum):\n";
+    // emulate mbRespectQuantum = true
+    auto quantum = Beats(4.0);
+    auto requestedTime = microseconds(3000000);
+    auto requestedBeat = Beats(1.0);
+    auto timeToForce = timeline.fromBeats(nextPhaseMatch(timeline.toBeats(requestedTime), requestedBeat, quantum));
+    std::cout << "- Chooses time = " << timeToForce.count() << "us to align phase\n";
+    
+    // applying the force
+    auto curBeatAtTime = toPhaseEncodedBeats(timeline, timeToForce, quantum);
+    auto closestInPhase = closestPhaseMatch(curBeatAtTime, requestedBeat, quantum);
+    auto shift = closestInPhase - curBeatAtTime;
+    auto timeDelta = timeline.fromBeats(shift) - timeline.fromBeats(Beats(0.0));
+    timeline.timeOrigin = timeline.timeOrigin - timeDelta;
+    timeline.beatOrigin = timeline.beatOrigin + requestedBeat - closestInPhase;
+
+    std::cout << "- Resulting `beatOrigin` = " << timeline.beatOrigin.floating() << "\n";
+    std::cout << "- Resulting `timeOrigin` = " << timeline.timeOrigin.count() << "us\n";
+    std::cout << "- Check: `beatAtTime(timeToForce)` = " << timeline.toBeats(timeToForce).floating() << "\n";
 
     return 0;
 }
