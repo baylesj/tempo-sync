@@ -65,6 +65,17 @@ fn main() {
     }
 
     if ifaces.is_empty() {
+        if let Ok(probe) = std::net::UdpSocket::bind("0.0.0.0:0") {
+            if probe.connect("224.76.78.75:20808").is_ok() {
+                if let Ok(std::net::SocketAddr::V4(local)) = probe.local_addr() {
+                    if !local.ip().is_unspecified() && !local.ip().is_loopback() {
+                        ifaces.push(*local.ip());
+                    }
+                }
+            }
+        }
+    }
+    if ifaces.is_empty() {
         ifaces.push(Ipv4Addr::new(127, 0, 0, 1));
     }
 

@@ -21,18 +21,28 @@ impl Default for Clock {
 
 impl Clock {
     pub fn new() -> Self {
-        let mut offset_us = 0;
-        if let Ok(uptime) = std::fs::read_to_string("/proc/uptime") {
-            if let Some(uptime_sec) = uptime.split_whitespace().next() {
-                if let Ok(secs) = uptime_sec.parse::<f64>() {
-                    offset_us = (secs * 1_000_000.0) as i64;
-                }
-            }
-        }
-        Clock { epoch: Instant::now(), offset_us }
+        Clock { epoch: Instant::now(), offset_us: 0 }
     }
 
     pub fn now(&self) -> HostTime {
+        #[cfg(target_os = "linux")]
+        {
+            #[repr(C)]
+            struct Timespec {
+                tv_sec: i64,
+                tv_nsec: i64,
+            }
+            extern "C" {
+                fn clock_gettime(clk_id: i32, tp: *mut Timespec) -> i32;
+            }
+            let mut ts = Timespec { tv_sec: 0, tv_nsec: 0 };
+            // CLOCK_MONOTONIC_RAW = 4
+            unsafe {
+                if clock_gettime(4, &mut ts) == 0 {
+                    return HostTime(ts.tv_sec * 1_000_000 + ts.tv_nsec / 1_000);
+                }
+            }
+        }
         let elapsed = self.epoch.elapsed().as_micros() as i64;
         HostTime(self.offset_us + elapsed)
     }
@@ -73,10 +83,14 @@ pub struct Runtime {
 impl Runtime {
     pub fn new(node_id: NodeId, ifaces: Vec<Ipv4Addr>) -> Self {
         let (tx, rx) = std::sync::mpsc::channel();
-        let state = Arc::new(Mutex::new(Some(SessionState::default())));
+        let clock = Clock::new();
+        let mut init_state = SessionState::default();
+        init_state.timeline.time_origin = clock.now();
+        init_state.start_stop.time = clock.now();
+        let state = Arc::new(Mutex::new(Some(init_state)));
         Runtime {
             engine: Engine::new(node_id),
-            clock: Clock::new(),
+            clock,
             state,
             num_peers: Arc::new(Mutex::new(0)),
             rx,
