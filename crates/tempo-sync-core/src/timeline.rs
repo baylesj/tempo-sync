@@ -136,3 +136,39 @@ mod tests {
         assert_eq!(phase, 1.0);
     }
 }
+
+impl SessionState {
+    pub fn next_phase_match(cur: Beats, target: Beats, q: f64) -> Beats {
+        if q == 0.0 { return target; }
+        let diff = cur - target;
+        let bins = diff / q;
+        let ceil_bins = bins.ceil();
+        ceil_bins * q + target
+    }
+
+    pub fn request_beat_at_time_quantized(&mut self, time: HostTime, beat: Beats, quantum: f64) {
+        let cur_beat = self.beat_at_time(time, quantum);
+        let next_match = Self::next_phase_match(cur_beat, beat, quantum);
+        let time_to_force = self.time_at_beat(next_match, quantum);
+        self.force_beat_at_time(time_to_force, beat);
+    }
+}
+
+#[cfg(test)]
+mod more_tests {
+    use super::*;
+
+    #[test]
+    fn test_quantized_launch() {
+        let mut state = SessionState::default();
+        state.timeline.tempo = TempoWire(500000);
+        state.timeline.beat_origin = MicroBeats(0);
+        state.timeline.time_origin = HostTime(0);
+
+        state.request_beat_at_time_quantized(HostTime(3000000), 1.0, 4.0);
+        
+        assert_eq!(state.timeline.beat_origin.to_beats(), -8.0);
+        assert_eq!(state.timeline.time_origin.0, 0);
+        assert_eq!(state.beat_at_time(HostTime(4500000), 4.0), 1.0);
+    }
+}
