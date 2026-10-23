@@ -170,4 +170,69 @@ mod sim_tests {
             assert!((beat - target_beat).abs() < 0.1);
         }
     }
+
+    #[test]
+    fn test_tie_break_adoption() {
+        // Test ordering where ID1 < ID2
+        let mut sim = Simulator::new();
+        sim.latency = 1_000;
+        
+        let id1 = NodeId([1,0,0,0,0,0,0,0]);
+        let id2 = NodeId([2,0,0,0,0,0,0,0]);
+        
+        // Add ID1 but start it with 90
+        let mut engine1 = Engine::new(id1);
+        engine1.state.set_tempo(90.0, HostTime(0));
+        let out1 = engine1.add_interface(InterfaceId(1), SocketAddrPlain { ip: [1,0,0,0], port: 20808 });
+        sim.handle_outputs(id1, out1);
+        let out1b = engine1.set_enabled(true, HostTime(0));
+        sim.handle_outputs(id1, out1b);
+        sim.engines.insert(id1, engine1);
+        
+        // Add ID2 but start it with 128
+        let mut engine2 = Engine::new(id2);
+        engine2.state.set_tempo(128.0, HostTime(0));
+        let out2 = engine2.add_interface(InterfaceId(1), SocketAddrPlain { ip: [2,0,0,0], port: 20808 });
+        sim.handle_outputs(id2, out2);
+        let out2b = engine2.set_enabled(true, HostTime(0));
+        sim.handle_outputs(id2, out2b);
+        sim.engines.insert(id2, engine2);
+        
+        sim.step(2_000_000); // 2 sec
+        
+        let t1 = sim.engines.get(&id1).unwrap().state.timeline.tempo.to_tempo().0;
+        let t2 = sim.engines.get(&id2).unwrap().state.timeline.tempo.to_tempo().0;
+        assert!((t1 - 90.0).abs() < 0.1, "t1: {}", t1);
+        assert!((t2 - 90.0).abs() < 0.1, "t2: {}", t2);
+
+        // Test ordering where ID1 > ID2
+        let mut sim2 = Simulator::new();
+        sim2.latency = 1_000;
+        
+        let id3 = NodeId([3,0,0,0,0,0,0,0]);
+        let id4 = NodeId([2,0,0,0,0,0,0,0]); // smaller!
+        
+        let mut engine3 = Engine::new(id3);
+        engine3.state.set_tempo(90.0, HostTime(0));
+        let out3 = engine3.add_interface(InterfaceId(1), SocketAddrPlain { ip: [3,0,0,0], port: 20808 });
+        sim2.handle_outputs(id3, out3);
+        let out3b = engine3.set_enabled(true, HostTime(0));
+        sim2.handle_outputs(id3, out3b);
+        sim2.engines.insert(id3, engine3);
+        
+        let mut engine4 = Engine::new(id4);
+        engine4.state.set_tempo(128.0, HostTime(0));
+        let out4 = engine4.add_interface(InterfaceId(1), SocketAddrPlain { ip: [2,0,0,0], port: 20808 });
+        sim2.handle_outputs(id4, out4);
+        let out4b = engine4.set_enabled(true, HostTime(0));
+        sim2.handle_outputs(id4, out4b);
+        sim2.engines.insert(id4, engine4);
+        
+        sim2.step(2_000_000);
+        
+        let t3 = sim2.engines.get(&id3).unwrap().state.timeline.tempo.to_tempo().0;
+        let t4 = sim2.engines.get(&id4).unwrap().state.timeline.tempo.to_tempo().0;
+        assert!((t3 - 128.0).abs() < 0.1, "t3: {}", t3);
+        assert!((t4 - 128.0).abs() < 0.1, "t4: {}", t4);
+    }
 }

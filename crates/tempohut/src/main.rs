@@ -18,6 +18,7 @@ fn main() {
     let mut ifaces = Vec::new();
     let mut dump = false;
 
+    let mut node_id = NodeId(*b"TempoHut");
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -43,6 +44,21 @@ fn main() {
                     }
                 }
             },
+            "--node-id-hex" => {
+                i += 1;
+                if i < args.len() {
+                    let hex = &args[i];
+                    if hex.len() == 16 {
+                        let mut arr = [0u8; 8];
+                        for j in 0..8 {
+                            if let Ok(b) = u8::from_str_radix(&hex[j*2..j*2+2], 16) {
+                                arr[j] = b;
+                            }
+                        }
+                        node_id = NodeId(arr);
+                    }
+                }
+            }
             _ => {}
         }
         i += 1;
@@ -52,7 +68,6 @@ fn main() {
         ifaces.push(Ipv4Addr::new(127, 0, 0, 1));
     }
 
-    let node_id = NodeId(*b"TempoHut");
     let mut runtime = Runtime::new(node_id, ifaces);
     runtime.set_dump_packets(dump);
     let session = runtime.handle();

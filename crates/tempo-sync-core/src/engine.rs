@@ -409,55 +409,70 @@ impl Engine {
             }
         }
 
+        let mut changed_session = false;
         if best_session != self.session_id {
             self.session_id = best_session;
             self.session_offset = best_offset;
+            changed_session = true;
             changed = true;
         }
         
         // Find best timeline in current session
-        let mut best_tl = self.state.timeline.clone();
-        best_tl.time_origin = HostTime(best_tl.time_origin.0.wrapping_add(self.session_offset));
+        let mut best_tl = if changed_session {
+            None
+        } else {
+            let mut tl = self.state.timeline.clone();
+            tl.time_origin = HostTime(tl.time_origin.0.wrapping_add(self.session_offset));
+            Some(tl)
+        };
         
         for peer in self.peers.values() {
             if peer.session_id == Some(self.session_id) {
                 if let Some(ref tl) = peer.timeline_ghost {
-                    if tl.beat_origin.0 > best_tl.beat_origin.0 {
-                        best_tl = tl.clone();
+                    match best_tl {
+                        Some(ref b_tl) if tl.beat_origin.0 <= b_tl.beat_origin.0 => {}
+                        _ => best_tl = Some(tl.clone()),
                     }
                 }
             }
         }
-        // Convert best_tl to HostTime
-        let mut best_tl_host = best_tl.clone();
-        best_tl_host.time_origin = HostTime(best_tl.time_origin.0.wrapping_sub(self.session_offset));
         
-        if best_tl_host != self.state.timeline {
-            self.state.timeline = best_tl_host;
-            changed = true;
+        if let Some(tl) = best_tl {
+            let mut best_tl_host = tl;
+            best_tl_host.time_origin = HostTime(best_tl_host.time_origin.0.wrapping_sub(self.session_offset));
+            if best_tl_host != self.state.timeline {
+                self.state.timeline = best_tl_host;
+                changed = true;
+            }
         }
 
         // StartStopState resolution
-        let mut best_ss = self.state.start_stop.clone();
-        // Convert local to ghost time for comparison
-        best_ss.time = HostTime(best_ss.time.0.wrapping_add(self.session_offset));
+        let mut best_ss = if changed_session {
+            None
+        } else {
+            let mut ss = self.state.start_stop.clone();
+            ss.time = HostTime(ss.time.0.wrapping_add(self.session_offset));
+            Some(ss)
+        };
         
         for peer in self.peers.values() {
             if peer.session_id == Some(self.session_id) {
                 if let Some(ref ss) = peer.start_stop_ghost {
-                    if ss.time.0 > best_ss.time.0 {
-                        best_ss = ss.clone();
+                    match best_ss {
+                        Some(ref b_ss) if ss.time.0 <= b_ss.time.0 => {}
+                        _ => best_ss = Some(ss.clone()),
                     }
                 }
             }
         }
-        // Convert best_ss back to HostTime
-        let mut best_ss_host = best_ss.clone();
-        best_ss_host.time = HostTime(best_ss.time.0.wrapping_sub(self.session_offset));
         
-        if best_ss_host != self.state.start_stop {
-            self.state.start_stop = best_ss_host;
-            changed = true;
+        if let Some(ss) = best_ss {
+            let mut best_ss_host = ss;
+            best_ss_host.time = HostTime(best_ss_host.time.0.wrapping_sub(self.session_offset));
+            if best_ss_host != self.state.start_stop {
+                self.state.start_stop = best_ss_host;
+                changed = true;
+            }
         }
 
         if changed {

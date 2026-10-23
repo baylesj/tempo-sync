@@ -10,6 +10,7 @@ use tempo_sync_core::{Engine, Output, SessionState, HostTime, NodeId, InterfaceI
 
 pub struct Clock {
     epoch: Instant,
+    offset_us: i64,
 }
 
 impl Default for Clock {
@@ -20,12 +21,20 @@ impl Default for Clock {
 
 impl Clock {
     pub fn new() -> Self {
-        Clock { epoch: Instant::now() }
+        let mut offset_us = 0;
+        if let Ok(uptime) = std::fs::read_to_string("/proc/uptime") {
+            if let Some(uptime_sec) = uptime.split_whitespace().next() {
+                if let Ok(secs) = uptime_sec.parse::<f64>() {
+                    offset_us = (secs * 1_000_000.0) as i64;
+                }
+            }
+        }
+        Clock { epoch: Instant::now(), offset_us }
     }
 
     pub fn now(&self) -> HostTime {
         let elapsed = self.epoch.elapsed().as_micros() as i64;
-        HostTime(elapsed)
+        HostTime(self.offset_us + elapsed)
     }
 }
 
