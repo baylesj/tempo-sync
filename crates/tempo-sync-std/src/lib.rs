@@ -56,11 +56,16 @@ impl Clock {
     }
 }
 
+enum RuntimeCmd {
+    CommitState(SessionState),
+    Shutdown,
+}
+
 #[derive(Clone)]
 pub struct SessionHandle {
     state: Arc<Mutex<Option<SessionState>>>,
     num_peers: Arc<Mutex<u32>>,
-    tx: std::sync::mpsc::Sender<SessionState>,
+    tx: std::sync::mpsc::Sender<RuntimeCmd>,
 }
 
 impl SessionHandle {
@@ -70,7 +75,11 @@ impl SessionHandle {
 
     pub fn commit_state(&self, state: SessionState) {
         *self.state.lock().unwrap() = Some(state.clone());
-        let _ = self.tx.send(state);
+        let _ = self.tx.send(RuntimeCmd::CommitState(state));
+    }
+
+    pub fn shutdown(&self) {
+        let _ = self.tx.send(RuntimeCmd::Shutdown);
     }
 
     pub fn num_peers(&self) -> u32 {
@@ -83,8 +92,8 @@ pub struct Runtime {
     clock: Clock,
     state: Arc<Mutex<Option<SessionState>>>,
     num_peers: Arc<Mutex<u32>>,
-    rx: std::sync::mpsc::Receiver<SessionState>,
-    tx: std::sync::mpsc::Sender<SessionState>,
+    rx: std::sync::mpsc::Receiver<RuntimeCmd>,
+    tx: std::sync::mpsc::Sender<RuntimeCmd>,
     ifaces: Vec<Ipv4Addr>,
 }
 
@@ -242,8 +251,38 @@ impl Runtime {
 
             let now = self.clock.now();
 
-            while let Ok(state) = self.rx.try_recv() {
-                outputs.extend(self.engine.commit_app_state(state, now));
+            let mut shutting_down = false;
+            while let Ok(cmd) = self.rx.try_recv() {
+                match cmd {
+                    RuntimeCmd::CommitState(state) => {
+                        outputs.extend(self.engine.commit_app_state(state, now));
+                    }
+                    RuntimeCmd::Shutdown => {
+                        outputs.extend(self.engine.set_enabled(false, now));
+                        shutting_down = true;
+                    }
+                }
+            }
+            if shutting_down {
+                for out in outputs.drain(..) {
+                    if let Output::Send {
+                        iface_id,
+                        to,
+                        bytes,
+                    } = out
+                    {
+                        let to_addr = SocketAddrV4::new(Ipv4Addr::from(to.ip), to.port);
+                        if to.ip == [224, 76, 78, 75] {
+                            let ip = self.ifaces[iface_id.0 as usize];
+                            let _ = mcast_send_sock2.set_multicast_if_v4(&ip);
+                            let _ = mcast_send_sock.set_multicast_ttl_v4(5);
+                            let _ = mcast_send_sock.send_to(&bytes, to_addr);
+                        } else if let Some(sock) = sockets.get(&iface_id) {
+                            let _ = sock.send_to(&bytes, to_addr);
+                        }
+                    }
+                }
+                return;
             }
 
             let mut buf = [0u8; 2048];

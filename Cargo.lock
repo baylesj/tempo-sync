@@ -41,6 +41,7 @@ dependencies = [
 name = "tempohut"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "tempo-sync-core",
  "tempo-sync-std",
 ]

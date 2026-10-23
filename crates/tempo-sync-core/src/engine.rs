@@ -489,7 +489,14 @@ impl Engine {
                         bytes: msg.clone(),
                     });
                 }
+                let next_id = u64::from_be_bytes(self.node_id.0).wrapping_add(1);
+                self.node_id = NodeId(next_id.to_be_bytes());
+                self.session_id = self.node_id;
                 self.peers.clear();
+                if self.num_session_peers != 0 {
+                    self.num_session_peers = 0;
+                    outputs.push(Output::NumPeersChanged(0));
+                }
             }
         }
         outputs

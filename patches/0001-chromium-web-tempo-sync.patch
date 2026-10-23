@@ -1,7 +1,7 @@
-From a6272549e5397df96ff5dc122a1682f7e96fa242 Mon Sep 17 00:00:00 2001
+From da3279074b318815dcc4dac9310d615753882622 Mon Sep 17 00:00:00 2001
 From: Jordan Bayles <jophba@chromium.org>
 Date: Fri, 23 Oct 2026 20:31:31 +0000
-Subject: [PATCH] [WIP] Prototype Web Tempo Sync API (navigator.tempoSync)
+Subject: [PATCH] Prototype Web Tempo Sync API (navigator.tempoSync)
 
 Prototypes the Web Tempo Sync API behind --enable-blink-features=TempoSync
 and --tempo-sync-engine=rust, bridging Blink to the sans-IO tempo_sync_core
@@ -13,13 +13,13 @@ Bug: 576996348
  content/browser/browser_interface_binders.cc  |   4 +
  content/browser/tempo_sync/README.md          |  38 ++
  .../tempo_sync/fake_tempo_sync_engine.cc      |  57 ++
- .../tempo_sync/fake_tempo_sync_engine.h       |  33 ++
+ .../tempo_sync/fake_tempo_sync_engine.h       |  33 +
  .../tempo_sync/rust_tempo_sync_bridge.rs      | 215 +++++++
- .../tempo_sync/rust_tempo_sync_engine.cc      | 413 +++++++++++++
- .../tempo_sync/rust_tempo_sync_engine.h       |  48 ++
- .../browser/tempo_sync/tempo_session_host.cc  |  70 +++
- .../browser/tempo_sync/tempo_session_host.h   |  45 ++
- .../browser/tempo_sync/tempo_sync_engine.h    |  31 +
+ .../tempo_sync/rust_tempo_sync_engine.cc      | 441 ++++++++++++++
+ .../tempo_sync/rust_tempo_sync_engine.h       |  49 ++
+ .../browser/tempo_sync/tempo_session_host.cc  |  87 +++
+ .../browser/tempo_sync/tempo_session_host.h   |  47 ++
+ .../browser/tempo_sync/tempo_sync_engine.h    |  32 +
  .../tempo_sync/tempo_sync_service_impl.cc     |  41 ++
  .../tempo_sync/tempo_sync_service_impl.h      |  29 +
  third_party/blink/public/mojom/BUILD.gn       |   1 +
@@ -54,14 +54,14 @@ Bug: 576996348
  third_party/tempo_sync_core/Cargo.toml        |   6 +
  third_party/tempo_sync_core/README.chromium   |  10 +
  third_party/tempo_sync_core/src/discovery.rs  |   2 +
- third_party/tempo_sync_core/src/engine.rs     | 555 ++++++++++++++++++
+ third_party/tempo_sync_core/src/engine.rs     | 562 ++++++++++++++++++
  third_party/tempo_sync_core/src/lib.rs        |  15 +
  .../tempo_sync_core/src/measurement.rs        |   3 +
  third_party/tempo_sync_core/src/session.rs    |   3 +
  third_party/tempo_sync_core/src/time.rs       |  49 ++
  third_party/tempo_sync_core/src/timeline.rs   | 175 ++++++
  third_party/tempo_sync_core/src/wire.rs       | 307 ++++++++++
- 52 files changed, 3031 insertions(+)
+ 52 files changed, 3087 insertions(+)
  create mode 100644 content/browser/tempo_sync/README.md
  create mode 100644 content/browser/tempo_sync/fake_tempo_sync_engine.cc
  create mode 100644 content/browser/tempo_sync/fake_tempo_sync_engine.h
@@ -105,7 +105,7 @@ Bug: 576996348
  create mode 100644 third_party/tempo_sync_core/src/wire.rs
 
 diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
-index cda5d70ca84a6..5f7f7f8ad130e 100644
+index 1476b3d456d16..c641eb61196ae 100644
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
 @@ -132,6 +132,7 @@ source_set("browser") {
@@ -124,7 +124,7 @@ index cda5d70ca84a6..5f7f7f8ad130e 100644
      "//third_party/blink/public/mojom/webnn",
      "//third_party/blink/public/strings",
      "//third_party/boringssl",
-@@ -1305,6 +1307,15 @@ source_set("browser") {
+@@ -1299,6 +1301,15 @@ source_set("browser") {
      "media/session/media_session_uma_helper.h",
      "media/system_media_controls/system_media_controls_notifier.cc",
      "media/system_media_controls/system_media_controls_notifier.h",
@@ -153,7 +153,7 @@ index cda5d70ca84a6..5f7f7f8ad130e 100644
 +  deps = [ "//third_party/tempo_sync_core" ]
 +}
 diff --git a/content/browser/browser_interface_binders.cc b/content/browser/browser_interface_binders.cc
-index ec3892a0c0c8f..6398e38c4ca68 100644
+index ca98f584a194c..c167f9937e0a9 100644
 --- a/content/browser/browser_interface_binders.cc
 +++ b/content/browser/browser_interface_binders.cc
 @@ -25,6 +25,7 @@
@@ -164,7 +164,7 @@ index ec3892a0c0c8f..6398e38c4ca68 100644
  #include "content/browser/browser_context_impl.h"
  #include "content/browser/browser_main_loop.h"
  #include "content/browser/connection_allowlist_utils.h"
-@@ -1221,6 +1222,9 @@ void PopulateBinderMapWithContext(
+@@ -1160,6 +1161,9 @@ void PopulateBinderMapWithContext(
          &BindWebNNWeightsFileCreatorForRenderFrame);
    }
  
@@ -544,10 +544,10 @@ index 0000000000000..438790e1c887d
 +}
 diff --git a/content/browser/tempo_sync/rust_tempo_sync_engine.cc b/content/browser/tempo_sync/rust_tempo_sync_engine.cc
 new file mode 100644
-index 0000000000000..e5013bb546bd5
+index 0000000000000..9c1fc3346fb03
 --- /dev/null
 +++ b/content/browser/tempo_sync/rust_tempo_sync_engine.cc
-@@ -0,0 +1,413 @@
+@@ -0,0 +1,441 @@
 +
 +#pragma allow_unsafe_buffers
 +#include "content/browser/tempo_sync/rust_tempo_sync_engine.h"
@@ -557,7 +557,9 @@ index 0000000000000..e5013bb546bd5
 +#include <vector>
 +
 +#include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
 +#include "base/task/single_thread_task_runner.h"
++#include "base/task/thread_pool.h"
 +#include "base/time/time.h"
 +#include "base/timer/timer.h"
 +#include "base/rand_util.h"
@@ -662,7 +664,18 @@ index 0000000000000..e5013bb546bd5
 +    }
 +    
 +    ReadMulticast();
-+    ProcessEvents((*rust_engine_)->set_enabled(true, GetNowMicros()));
++    if (enabled_) {
++      ProcessEvents((*rust_engine_)->set_enabled(true, GetNowMicros()));
++    }
++  }
++
++  void SetEnabled(bool enabled) {
++    enabled_ = enabled;
++    if (!rust_engine_) return;
++    if (!enabled) {
++      timer_.Stop();
++    }
++    ProcessEvents((*rust_engine_)->set_enabled(enabled, GetNowMicros()));
 +  }
 +
 +  void SetTimeline(blink::mojom::TimelinePtr timeline) {
@@ -688,6 +701,10 @@ index 0000000000000..e5013bb546bd5
 +  }
 +
 +  void Shutdown() {
++    if (rust_engine_ && enabled_) {
++      ProcessEvents((*rust_engine_)->set_enabled(false, GetNowMicros()));
++      enabled_ = false;
++    }
 +    timer_.Stop();
 +    multicast_socket_.reset();
 +    unicast_sockets_.clear();
@@ -887,6 +904,7 @@ index 0000000000000..e5013bb546bd5
 +  net::IPEndPoint recv_address_;
 +  base::OneShotTimer timer_;
 +  std::vector<NetworkInfo> networks_;
++  bool enabled_ = false;
 +};
 +
 +// --- RustTempoSyncEngine ---
@@ -911,7 +929,9 @@ index 0000000000000..e5013bb546bd5
 +RustTempoSyncEngine::~RustTempoSyncEngine() {
 +  engine_thread_->task_runner()->PostTask(
 +      FROM_HERE, base::BindOnce(&Core::Shutdown, core_));
-+  engine_thread_->Stop();
++  base::ThreadPool::PostTask(
++      FROM_HERE, {base::MayBlock()},
++      base::DoNothingWithBoundArgs(std::move(engine_thread_)));
 +}
 +
 +void RustTempoSyncEngine::AddObserver(Observer* observer) {
@@ -920,6 +940,14 @@ index 0000000000000..e5013bb546bd5
 +
 +void RustTempoSyncEngine::RemoveObserver(Observer* observer) {
 +  observers_.RemoveObserver(observer);
++}
++
++void RustTempoSyncEngine::SetEnabled(bool enabled) {
++  if (!enabled) {
++    num_peers_ = 0;
++  }
++  engine_thread_->task_runner()->PostTask(
++      FROM_HERE, base::BindOnce(&Core::SetEnabled, core_, enabled));
 +}
 +
 +void RustTempoSyncEngine::SetTimeline(blink::mojom::TimelinePtr timeline) {
@@ -963,10 +991,10 @@ index 0000000000000..e5013bb546bd5
 +}  // namespace content
 diff --git a/content/browser/tempo_sync/rust_tempo_sync_engine.h b/content/browser/tempo_sync/rust_tempo_sync_engine.h
 new file mode 100644
-index 0000000000000..7822679e9f20e
+index 0000000000000..4ed65b838a151
 --- /dev/null
 +++ b/content/browser/tempo_sync/rust_tempo_sync_engine.h
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,49 @@
 +#ifndef CONTENT_BROWSER_TEMPO_SYNC_RUST_TEMPO_SYNC_ENGINE_H_
 +#define CONTENT_BROWSER_TEMPO_SYNC_RUST_TEMPO_SYNC_ENGINE_H_
 +
@@ -989,6 +1017,7 @@ index 0000000000000..7822679e9f20e
 +  void AddObserver(Observer* observer) override;
 +  void RemoveObserver(Observer* observer) override;
 +
++  void SetEnabled(bool enabled) override;
 +  void SetTimeline(blink::mojom::TimelinePtr timeline) override;
 +  void SetStartStop(blink::mojom::StartStopStatePtr state) override;
 +  blink::mojom::TimelinePtr GetTimeline() const override;
@@ -1017,11 +1046,12 @@ index 0000000000000..7822679e9f20e
 +#endif  // CONTENT_BROWSER_TEMPO_SYNC_RUST_TEMPO_SYNC_ENGINE_H_
 diff --git a/content/browser/tempo_sync/tempo_session_host.cc b/content/browser/tempo_sync/tempo_session_host.cc
 new file mode 100644
-index 0000000000000..cf6ca7ee261e4
+index 0000000000000..fce85bc14b117
 --- /dev/null
 +++ b/content/browser/tempo_sync/tempo_session_host.cc
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,87 @@
 +#include "content/browser/tempo_sync/tempo_session_host.h"
++#include "base/functional/bind.h"
 +#include "base/memory/ptr_util.h"
 +#include "base/command_line.h"
 +#include "content/browser/tempo_sync/fake_tempo_sync_engine.h"
@@ -1049,6 +1079,8 @@ index 0000000000000..cf6ca7ee261e4
 +    engine_ = std::make_unique<RustTempoSyncEngine>();
 +  }
 +  engine_->AddObserver(this);
++  receivers_.set_disconnect_handler(base::BindRepeating(
++      &TempoSessionHost::OnReceiverDisconnected, base::Unretained(this)));
 +}
 +
 +TempoSessionHost::~TempoSessionHost() {
@@ -1057,8 +1089,12 @@ index 0000000000000..cf6ca7ee261e4
 +
 +void TempoSessionHost::AddClient(mojo::PendingReceiver<blink::mojom::TempoSession> receiver,
 +                                 mojo::PendingRemote<blink::mojom::TempoSessionClient> client) {
++  const bool was_empty = receivers_.empty();
 +  receivers_.Add(this, std::move(receiver));
 +  clients_.Add(std::move(client));
++  if (was_empty) {
++    engine_->SetEnabled(true);
++  }
 +}
 +
 +void TempoSessionHost::CommitTimeline(blink::mojom::TimelinePtr timeline) {
@@ -1070,6 +1106,16 @@ index 0000000000000..cf6ca7ee261e4
 +}
 +
 +void TempoSessionHost::Close() {
++  receivers_.Remove(receivers_.current_receiver());
++  if (receivers_.empty()) {
++    engine_->SetEnabled(false);
++  }
++}
++
++void TempoSessionHost::OnReceiverDisconnected() {
++  if (receivers_.empty()) {
++    engine_->SetEnabled(false);
++  }
 +}
 +
 +void TempoSessionHost::OnTimelineChanged(blink::mojom::TimelinePtr timeline) {
@@ -1093,10 +1139,10 @@ index 0000000000000..cf6ca7ee261e4
 +}  // namespace content
 diff --git a/content/browser/tempo_sync/tempo_session_host.h b/content/browser/tempo_sync/tempo_session_host.h
 new file mode 100644
-index 0000000000000..9b97724f2099c
+index 0000000000000..db22360009576
 --- /dev/null
 +++ b/content/browser/tempo_sync/tempo_session_host.h
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,47 @@
 +#ifndef CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SESSION_HOST_H_
 +#define CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SESSION_HOST_H_
 +
@@ -1134,6 +1180,8 @@ index 0000000000000..9b97724f2099c
 +  void OnNumPeersChanged(uint32_t num_peers) override;
 +
 + private:
++  void OnReceiverDisconnected();
++
 +  std::unique_ptr<TempoSyncEngine> engine_;
 +  mojo::RemoteSet<blink::mojom::TempoSessionClient> clients_;
 +  mojo::ReceiverSet<blink::mojom::TempoSession> receivers_;
@@ -1145,10 +1193,10 @@ index 0000000000000..9b97724f2099c
 \ No newline at end of file
 diff --git a/content/browser/tempo_sync/tempo_sync_engine.h b/content/browser/tempo_sync/tempo_sync_engine.h
 new file mode 100644
-index 0000000000000..56dfd43a7200e
+index 0000000000000..63713d44e01df
 --- /dev/null
 +++ b/content/browser/tempo_sync/tempo_sync_engine.h
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,32 @@
 +#ifndef CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SYNC_ENGINE_H_
 +#define CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SYNC_ENGINE_H_
 +
@@ -1170,6 +1218,7 @@ index 0000000000000..56dfd43a7200e
 +  virtual void AddObserver(Observer* observer) = 0;
 +  virtual void RemoveObserver(Observer* observer) = 0;
 +
++  virtual void SetEnabled(bool enabled) {}
 +  virtual void SetTimeline(blink::mojom::TimelinePtr timeline) = 0;
 +  virtual void SetStartStop(blink::mojom::StartStopStatePtr state) = 0;
 +  virtual blink::mojom::TimelinePtr GetTimeline() const = 0;
@@ -1265,7 +1314,7 @@ index 0000000000000..0284b811139b0
 +#endif  // CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SYNC_SERVICE_IMPL_H_
 \ No newline at end of file
 diff --git a/third_party/blink/public/mojom/BUILD.gn b/third_party/blink/public/mojom/BUILD.gn
-index dfbc339197ceb..5b726454cb14e 100644
+index f43e0699bcb3d..e766fa3c117a5 100644
 --- a/third_party/blink/public/mojom/BUILD.gn
 +++ b/third_party/blink/public/mojom/BUILD.gn
 @@ -279,6 +279,7 @@ mojom("mojom_platform") {
@@ -1320,10 +1369,10 @@ index 0000000000000..a85c6c3d4bcbb
 +  OnNumPeersChanged(uint32 num_peers);
 +};
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index b56e9a96ebd3d..cc85eb1999566 100644
+index 58759953af29a..0566c9660d326 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
-@@ -122,6 +122,8 @@ generated_dictionary_sources_in_modules = [
+@@ -128,6 +128,8 @@ generated_dictionary_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_address_init.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_all_accepted_credentials_options.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_all_accepted_credentials_options.h",
@@ -1332,7 +1381,7 @@ index b56e9a96ebd3d..cc85eb1999566 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_analyser_options.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_analyser_options.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_android_pay_method_data.cc",
-@@ -2067,6 +2069,12 @@ generated_interface_sources_in_modules = [
+@@ -2091,6 +2093,12 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_ads.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_ambient_light_sensor.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_ambient_light_sensor.h",
@@ -1346,10 +1395,10 @@ index b56e9a96ebd3d..cc85eb1999566 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_analyser_node.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_angle_instanced_arrays.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_modules.gni b/third_party/blink/renderer/bindings/idl_in_modules.gni
-index 68b809c784a4c..372ee2ea1c6ef 100644
+index 07a93dbbfedf7..fac08d94b051f 100644
 --- a/third_party/blink/renderer/bindings/idl_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_modules.gni
-@@ -816,6 +816,11 @@ static_idl_files_in_modules = [
+@@ -836,6 +836,11 @@ static_idl_files_in_modules = [
    "//third_party/blink/renderer/modules/web_install/install_params.idl",
    "//third_party/blink/renderer/modules/web_install/navigator_web_install.idl",
    "//third_party/blink/renderer/modules/web_install/web_install_result.idl",
@@ -1374,7 +1423,7 @@ index a0e2048beae6d..eafe6cc4eb8ab 100644
      "NavigationHistoryEntry",
      "Node",
 diff --git a/third_party/blink/renderer/core/events/event_type_names.json5 b/third_party/blink/renderer/core/events/event_type_names.json5
-index 33896619fb2ef..54e5b00e99831 100644
+index 2fc56b6b772a0..308a2a27561fe 100644
 --- a/third_party/blink/renderer/core/events/event_type_names.json5
 +++ b/third_party/blink/renderer/core/events/event_type_names.json5
 @@ -117,6 +117,9 @@
@@ -1388,10 +1437,10 @@ index 33896619fb2ef..54e5b00e99831 100644
      "exit",
      "fetch",
 diff --git a/third_party/blink/renderer/modules/BUILD.gn b/third_party/blink/renderer/modules/BUILD.gn
-index 9b0b898bdecf6..3964cb41f5ded 100644
+index ab4f7332e8b43..2fcc0f4077d50 100644
 --- a/third_party/blink/renderer/modules/BUILD.gn
 +++ b/third_party/blink/renderer/modules/BUILD.gn
-@@ -160,6 +160,7 @@ component("modules") {
+@@ -161,6 +161,7 @@ component("modules") {
      "//third_party/blink/renderer/modules/webcodecs",
      "//third_party/blink/renderer/modules/webgl",
      "//third_party/blink/renderer/modules/webgpu",
@@ -2197,10 +2246,10 @@ index 5548c84d187c6..06d50d14181fb 100644
    ScriptPromise<IDLUndefined> suspendContext(ScriptState*, ExceptionState&);
    ScriptPromise<IDLUndefined> closeContext(ScriptState*, ExceptionState&);
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-index bc09fbe794c05..b6e099fc41692 100644
+index fae98ab3ff706..282ca9c511507 100644
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -7359,6 +7359,10 @@
+@@ -7217,6 +7217,10 @@
  
      // WebBluetooth is enabled by default on Android, ChromeOS, iOS, macOS and
      // Windows.
@@ -2406,10 +2455,10 @@ index 0000000000000..5316940b46f8b
 +// Discovery logic will be handled inside Engine, or we can just put it there.
 diff --git a/third_party/tempo_sync_core/src/engine.rs b/third_party/tempo_sync_core/src/engine.rs
 new file mode 100644
-index 0000000000000..6e0a69388599f
+index 0000000000000..1574940ee77e1
 --- /dev/null
 +++ b/third_party/tempo_sync_core/src/engine.rs
-@@ -0,0 +1,555 @@
+@@ -0,0 +1,562 @@
 +// SPDX-License-Identifier: Apache-2.0
 +
 +use std::collections::HashMap;
@@ -2819,7 +2868,14 @@ index 0000000000000..6e0a69388599f
 +                        bytes: msg.clone(),
 +                    });
 +                }
++                let next_id = u64::from_be_bytes(self.node_id.0).wrapping_add(1);
++                self.node_id = NodeId(next_id.to_be_bytes());
++                self.session_id = self.node_id;
 +                self.peers.clear();
++                if self.num_session_peers != 0 {
++                    self.num_session_peers = 0;
++                    outputs.push(Output::NumPeersChanged(0));
++                }
 +            }
 +        }
 +        outputs
@@ -3554,5 +3610,5 @@ index 0000000000000..91f0a4d7d8ffe
 +    }
 +}
 -- 
-2.56.0.257.gf7497c7d27-goog
+2.56.0.rc1.315.gc6ed9934b7-goog
 
