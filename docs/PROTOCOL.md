@@ -108,12 +108,33 @@ Peers exchange pings and pongs to measure the clock offset between their local "
 
 ## 6. Session Management
 
+* **Session Initialization**: When a peer starts up solo, it founds a new session. 
+  * The `GhostXForm` is initialized with `slope = 1.0` and `intercept = -now_host_time`. This ensures the session's Ghost Time starts at exactly `0` at the moment of creation.
+  * The initial Session Timeline (in Ghost Time) is `{tempo=initial, beatOrigin=0, timeOrigin=0}`.
+  * The initial Client Timeline (in Host Time) is `{tempo=initial, beatOrigin=0, timeOrigin=now_host_time}` (where `now_host_time = ghostToHost(0)`).
 * **SessionId Generation**: When starting solo, a peer's `SessionId` is its own randomly generated `NodeId`.
 * **Adopting Sessions**: When a peer measures another session, it compares session precedence:
-  * The session with the **older clock** wins. This is evaluated by comparing the Ghost Times at the current Host Time. If the incoming session's Ghost Time is greater than the current session's Ghost Time by more than `500,000` microseconds (0.5s), the incoming session wins.
+  * The session with the **older clock** wins. Because Ghost Time starts at 0 upon session creation, a session founded earlier will have a larger Ghost Time at any given Host Time. If the incoming session's Ghost Time is greater than the current session's Ghost Time by more than `500,000` microseconds (0.5s), the incoming session wins.
   * If the Ghost Times are within 0.5s of each other, the session with the **lexicographically smaller** `SessionId` (byte-array comparison) wins.
-* **Timeline Continuity**: When adopting a session timeline, the peer adjusts its local (Host Time) timeline so its `timeOrigin` exactly matches beat 0 of the session timeline (using the new `GhostXForm`). This preserves the continuous local beat magnitude without jarring jumps.
-* **Timeline Updates (Tempo Changes)**: When a peer proposes a new timeline (e.g. tempo change), it sets the new `beatOrigin` to the current beat value (or strictly `current_beatOrigin + 1` if necessary). Other peers in the same session will adopt incoming timelines if `incoming.beatOrigin > current.beatOrigin`. `beatOrigin` effectively acts as a monotonic sequence number within the session.
+* **Client vs Session Timeline Conversion**: 
+  * **Adopting a Session Timeline**: When a peer receives an updated Session Timeline (in Ghost Time), it must update its local Client Timeline (in Host Time). To maintain continuity (no jumping beats) while preserving the session's quantization grid, it aligns the client `timeOrigin` to the host time corresponding to beat 0 on the session timeline:
+    ```
+    hostBeatZero = xform.ghostToHost(session.fromBeats(0))
+    newTempo = session.tempo
+    // Make it continuous at the current Host Time (atTime)
+    newBeatOrigin = curClient.toBeats(atTime) - (atTime - hostBeatZero) / newTempo
+    newTimeOrigin = hostBeatZero
+    ```
+  * **Committing a New Timeline**: When a client proposes a change (e.g., tempo change or forced beat), it updates its Client Timeline. To propagate this to the session, it produces a new Session Timeline (in Ghost Time):
+    ```
+    ghostBeat0 = xform.hostToGhost(client.timeOrigin)
+    newTempo = client.tempo
+    // beatOrigin acts as a sequence number; ensure it strictly increases
+    newBeatOrigin = max(curSession.toBeats(xform.hostToGhost(atTime)), 
+                        curSession.beatOrigin + 1)
+    newTimeOrigin = ghostBeat0 + (newBeatOrigin * newTempo) // ghost time at newBeatOrigin
+    ```
+    Other peers in the same session adopt this timeline strictly if `incoming.beatOrigin > current.beatOrigin`.
 * **numPeers Semantics**: The API exposed `numPeers` count strictly reflects the number of peers *currently in the same session*. It does not include peers on the network that are in different sessions (e.g. due to having older clocks).
 * **Founder Leaves**: If the session's founding peer leaves, the `SessionId` does not change. The remaining peers continue to broadcast and use the same `SessionId`.
 
