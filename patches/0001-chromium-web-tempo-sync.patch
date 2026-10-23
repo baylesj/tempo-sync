@@ -1,4 +1,4 @@
-From da3279074b318815dcc4dac9310d615753882622 Mon Sep 17 00:00:00 2001
+From 5cfc007d0242d4a68964aa6c10b2d64cf9b5dfab Mon Sep 17 00:00:00 2001
 From: Jordan Bayles <jophba@chromium.org>
 Date: Fri, 23 Oct 2026 20:31:31 +0000
 Subject: [PATCH] Prototype Web Tempo Sync API (navigator.tempoSync)
@@ -15,7 +15,7 @@ Bug: 576996348
  .../tempo_sync/fake_tempo_sync_engine.cc      |  57 ++
  .../tempo_sync/fake_tempo_sync_engine.h       |  33 +
  .../tempo_sync/rust_tempo_sync_bridge.rs      | 215 +++++++
- .../tempo_sync/rust_tempo_sync_engine.cc      | 441 ++++++++++++++
+ .../tempo_sync/rust_tempo_sync_engine.cc      | 450 ++++++++++++++
  .../tempo_sync/rust_tempo_sync_engine.h       |  49 ++
  .../browser/tempo_sync/tempo_session_host.cc  |  87 +++
  .../browser/tempo_sync/tempo_session_host.h   |  47 ++
@@ -61,7 +61,7 @@ Bug: 576996348
  third_party/tempo_sync_core/src/time.rs       |  49 ++
  third_party/tempo_sync_core/src/timeline.rs   | 175 ++++++
  third_party/tempo_sync_core/src/wire.rs       | 307 ++++++++++
- 52 files changed, 3087 insertions(+)
+ 52 files changed, 3096 insertions(+)
  create mode 100644 content/browser/tempo_sync/README.md
  create mode 100644 content/browser/tempo_sync/fake_tempo_sync_engine.cc
  create mode 100644 content/browser/tempo_sync/fake_tempo_sync_engine.h
@@ -544,10 +544,10 @@ index 0000000000000..438790e1c887d
 +}
 diff --git a/content/browser/tempo_sync/rust_tempo_sync_engine.cc b/content/browser/tempo_sync/rust_tempo_sync_engine.cc
 new file mode 100644
-index 0000000000000..9c1fc3346fb03
+index 0000000000000..a246e42873e3b
 --- /dev/null
 +++ b/content/browser/tempo_sync/rust_tempo_sync_engine.cc
-@@ -0,0 +1,441 @@
+@@ -0,0 +1,450 @@
 +
 +#pragma allow_unsafe_buffers
 +#include "content/browser/tempo_sync/rust_tempo_sync_engine.h"
@@ -564,6 +564,7 @@ index 0000000000000..9c1fc3346fb03
 +#include "base/timer/timer.h"
 +#include "base/rand_util.h"
 +#include "base/logging.h"
++#include "content/public/browser/browser_thread.h"
 +#include "net/base/network_interfaces.h"
 +#include "net/base/ip_address.h"
 +#include "net/base/ip_endpoint.h"
@@ -587,12 +588,9 @@ index 0000000000000..9c1fc3346fb03
 +       base::WeakPtr<RustTempoSyncEngine> engine_weak)
 +      : ui_task_runner_(ui_task_runner), engine_weak_(engine_weak) {}
 +
-+  void Init() {
++  void Init(net::NetworkInterfaceList networks) {
 +    uint64_t node_id = base::RandUint64();
 +    rust_engine_.emplace(content::tempo_sync_bridge::create_engine(node_id));
-+    
-+    net::NetworkInterfaceList networks;
-+    net::GetNetworkList(&networks, net::INCLUDE_HOST_SCOPE_VIRTUAL_INTERFACES);
 +
 +    bool has_ipv4 = false;
 +    for (const auto& net : networks) {
@@ -909,29 +907,40 @@ index 0000000000000..9c1fc3346fb03
 +
 +// --- RustTempoSyncEngine ---
 +
-+RustTempoSyncEngine::RustTempoSyncEngine() : weak_factory_(this) {
++namespace {
++net::NetworkInterfaceList FetchNetworkInterfaces() {
++  net::NetworkInterfaceList networks;
++  net::GetNetworkList(&networks, net::INCLUDE_HOST_SCOPE_VIRTUAL_INTERFACES);
++  return networks;
++}
++}  // namespace
++
++RustTempoSyncEngine::RustTempoSyncEngine()
++    : io_task_runner_(content::GetIOThreadTaskRunner({})),
++      weak_factory_(this) {
 +  timeline_ = blink::mojom::Timeline::New(120.0, 0.0, base::TimeTicks::Now());
 +  start_stop_ = blink::mojom::StartStopState::New(false, 0.0, base::TimeTicks::Now());
-+
-+  engine_thread_ = std::make_unique<base::Thread>("TempoSyncEngineThread");
-+  base::Thread::Options options;
-+  options.message_pump_type = base::MessagePumpType::IO;
-+  engine_thread_->StartWithOptions(std::move(options));
 +
 +  core_ = base::MakeRefCounted<Core>(
 +      base::SingleThreadTaskRunner::GetCurrentDefault(),
 +      weak_factory_.GetWeakPtr());
 +
-+  engine_thread_->task_runner()->PostTask(
-+      FROM_HERE, base::BindOnce(&Core::Init, core_));
++  base::ThreadPool::PostTaskAndReplyWithResult(
++      FROM_HERE, {base::MayBlock()},
++      base::BindOnce(&FetchNetworkInterfaces),
++      base::BindOnce(
++          [](scoped_refptr<base::SingleThreadTaskRunner> io_runner,
++             scoped_refptr<Core> core, net::NetworkInterfaceList networks) {
++            io_runner->PostTask(
++                FROM_HERE,
++                base::BindOnce(&Core::Init, core, std::move(networks)));
++          },
++          io_task_runner_, core_));
 +}
 +
 +RustTempoSyncEngine::~RustTempoSyncEngine() {
-+  engine_thread_->task_runner()->PostTask(
++  io_task_runner_->PostTask(
 +      FROM_HERE, base::BindOnce(&Core::Shutdown, core_));
-+  base::ThreadPool::PostTask(
-+      FROM_HERE, {base::MayBlock()},
-+      base::DoNothingWithBoundArgs(std::move(engine_thread_)));
 +}
 +
 +void RustTempoSyncEngine::AddObserver(Observer* observer) {
@@ -946,17 +955,17 @@ index 0000000000000..9c1fc3346fb03
 +  if (!enabled) {
 +    num_peers_ = 0;
 +  }
-+  engine_thread_->task_runner()->PostTask(
++  io_task_runner_->PostTask(
 +      FROM_HERE, base::BindOnce(&Core::SetEnabled, core_, enabled));
 +}
 +
 +void RustTempoSyncEngine::SetTimeline(blink::mojom::TimelinePtr timeline) {
-+  engine_thread_->task_runner()->PostTask(
++  io_task_runner_->PostTask(
 +      FROM_HERE, base::BindOnce(&Core::SetTimeline, core_, timeline->Clone()));
 +}
 +
 +void RustTempoSyncEngine::SetStartStop(blink::mojom::StartStopStatePtr state) {
-+  engine_thread_->task_runner()->PostTask(
++  io_task_runner_->PostTask(
 +      FROM_HERE, base::BindOnce(&Core::SetStartStop, core_, state->Clone()));
 +}
 +
@@ -991,7 +1000,7 @@ index 0000000000000..9c1fc3346fb03
 +}  // namespace content
 diff --git a/content/browser/tempo_sync/rust_tempo_sync_engine.h b/content/browser/tempo_sync/rust_tempo_sync_engine.h
 new file mode 100644
-index 0000000000000..4ed65b838a151
+index 0000000000000..a33fca99b09b2
 --- /dev/null
 +++ b/content/browser/tempo_sync/rust_tempo_sync_engine.h
 @@ -0,0 +1,49 @@
@@ -1003,7 +1012,7 @@ index 0000000000000..4ed65b838a151
 +#include "base/memory/scoped_refptr.h"
 +#include "base/memory/weak_ptr.h"
 +#include "base/observer_list.h"
-+#include "base/threading/thread.h"
++#include "base/task/single_thread_task_runner.h"
 +#include "content/browser/tempo_sync/tempo_sync_engine.h"
 +
 +namespace content {
@@ -1035,7 +1044,7 @@ index 0000000000000..4ed65b838a151
 +  blink::mojom::StartStopStatePtr start_stop_;
 +  uint32_t num_peers_ = 0;
 +
-+  std::unique_ptr<base::Thread> engine_thread_;
++  scoped_refptr<base::SingleThreadTaskRunner> io_task_runner_;
 +  scoped_refptr<Core> core_;
 +  
 +  base::WeakPtrFactory<RustTempoSyncEngine> weak_factory_;
