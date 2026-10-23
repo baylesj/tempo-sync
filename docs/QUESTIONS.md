@@ -22,3 +22,9 @@
      - However, when a peer receives a `Pong`, it *immediately* fires the next `Ping` and resets the 50ms timer.
      - A measurement cycle attempts to collect 100 data points (which takes ~51 ping/pong exchanges, as each pair after the first yields 2 points). It finishes early if it reaches 100 points, or fails if the 50ms timer fires 5 times cumulatively across the entire measurement cycle (`kNumberMeasurements = 5`). 
      - There is no separate "fast measurement" mode; a new session immediately triggers this tight ping/pong loop, and then re-measures periodically every 30 seconds.
+
+5. **Timeline Entry Field Order**: Is the payload for `tmln` strictly `(tempo, timeOrigin, beatOrigin)` or `(tempo, beatOrigin, timeOrigin)`?
+   * **Answer**: It is strictly **`tempo, beatOrigin, timeOrigin`**. Confirmed via the C++ `Timeline` serializer (`std::tie(tl.tempo, tl.beatOrigin, tl.timeOrigin)`) and the hex dump in `TEST_VECTORS.md`.
+
+6. **Pong composition**: Does the pong message wrap the ping inside another message header, or is it flat?
+   * **Answer**: It is flat. The Pong message consists of a SINGLE 9-byte header (`_link_v1` + `0x02`), followed by the Pong's own payload entries (`sess`, `__gt`), followed immediately by the *payload entries* of the Ping it received (`__ht` and `_pgt`). It does **not** append the Ping's 9-byte message header.

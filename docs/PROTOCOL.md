@@ -52,10 +52,10 @@ A payload is a sequence of entries. Each entry consists of an 8-byte header foll
 
 ### Exact Payload Entries & Clock References
 
-1. **Timeline** (Key: `'tmln'`) - Size: 24 bytes
-   * `Tempo` (8 bytes): Microseconds per beat (`int64`).
-   * `BeatOrigin` (8 bytes): The reference beat in micro-beats (`int64`).
-   * `TimeOrigin` (8 bytes): The reference time in microseconds (`int64`). **Clock: Ghost Time** (Session clock).
+1. **Timeline** (Key: `'tmln'`) - Size: 24 bytes. Field order is strictly:
+   * **Byte 0..7**: `Tempo` (8 bytes): Microseconds per beat (`int64`).
+   * **Byte 8..15**: `BeatOrigin` (8 bytes): The reference beat in micro-beats (`int64`).
+   * **Byte 16..23**: `TimeOrigin` (8 bytes): The reference time in microseconds (`int64`). **Clock: Ghost Time** (Session clock).
 
 2. **StartStopState** (Key: `'stst'`) - Size: 17 bytes
    * `IsPlaying` (1 byte): `bool`.
@@ -77,7 +77,7 @@ A payload is a sequence of entries. Each entry consists of an 8-byte header foll
 ### Message Entry Compositions
 * **Alive / Response**: Includes `tmln`, `sess`, `stst`, `mep4`, `mep6`, `aep4`, `aep6`. (`tmln` and `stst` timestamps are strictly in **Ghost Time**).
 * **Ping**: Includes `__ht` (Host Time of sender). On follow-up pings, also includes `_pgt` (the Ghost Time the responder sent in the previous Pong).
-* **Pong**: Includes `sess`, `__gt` (Ghost Time of responder), followed immediately by **appending the exact payload of the Ping it is replying to** (meaning the final Pong message ends with the pinger's `__ht` and `_pgt`).
+* **Pong**: Includes `sess`, `__gt` (Ghost Time of responder), followed immediately by **appending the payload entries of the Ping** it is replying to. Do *not* append the Ping's 9-byte message header, only its payload entries (meaning the final Pong message ends with the pinger's `__ht` and `_pgt` entries). There is only one `_link_v1` header per message.
 
 ## 4. Discovery State Machine
 
@@ -93,9 +93,9 @@ Peers exchange pings and pongs to measure the clock offset between their local "
 
 ### The Ping-Pong Process
 1. **Peer A** sends a `Ping` containing its current time: `Payload(__ht=A_t1)`. It sets a 50ms timer.
-2. **Peer B** receives the Ping at `B_t1`. It replies with a `Pong` containing: `Payload(sess, __gt=B_ghost_t1) + PingPayload(__ht=A_t1)`.
+2. **Peer B** receives the Ping at `B_t1`. It replies with a `Pong` containing: `Payload(sess, __gt=B_ghost_t1) + PingPayloadEntries(__ht=A_t1)`.
 3. **Peer A** receives the `Pong` at `A_t2`. It *immediately* sends a follow-up `Ping` containing: `Payload(__ht=A_t2, _pgt=B_ghost_t1)`. It resets the 50ms timer.
-4. **Peer B** receives this Ping at `B_t2` and sends a `Pong` containing: `Payload(sess, __gt=B_ghost_t2) + PingPayload(__ht=A_t2, _pgt=B_ghost_t1)`.
+4. **Peer B** receives this Ping at `B_t2` and sends a `Pong` containing: `Payload(sess, __gt=B_ghost_t2) + PingPayloadEntries(__ht=A_t2, _pgt=B_ghost_t1)`.
 5. **Peer A** receives this second Pong at `A_t3`. It calculates two clock offset data points (assuming symmetric RTT):
    * `offset1 = B_ghost_t2 - (A_t3 + A_t2) / 2.0`
    * `offset2 = (B_ghost_t2 + B_ghost_t1) / 2.0 - A_t2`
@@ -113,7 +113,8 @@ Peers exchange pings and pongs to measure the clock offset between their local "
   * The session with the **older clock** wins. This is evaluated by comparing the Ghost Times at the current Host Time. If the incoming session's Ghost Time is greater than the current session's Ghost Time by more than `500,000` microseconds (0.5s), the incoming session wins.
   * If the Ghost Times are within 0.5s of each other, the session with the **lexicographically smaller** `SessionId` (byte-array comparison) wins.
 * **Timeline Continuity**: When adopting a session timeline, the peer adjusts its local (Host Time) timeline so its `timeOrigin` exactly matches beat 0 of the session timeline (using the new `GhostXForm`). This preserves the continuous local beat magnitude without jarring jumps.
-* **Timeline Updates (Tempo Changes)**: When a peer proposes a new timeline (e.g. tempo change), it sets the new `beatOrigin` to the current beat value (or strictly `current_beatOrigin + 1` if necessary). Other peers in the session will adopt incoming timelines if `incoming.beatOrigin > current.beatOrigin`. `beatOrigin` effectively acts as a monotonic sequence number.
+* **Timeline Updates (Tempo Changes)**: When a peer proposes a new timeline (e.g. tempo change), it sets the new `beatOrigin` to the current beat value (or strictly `current_beatOrigin + 1` if necessary). Other peers in the same session will adopt incoming timelines if `incoming.beatOrigin > current.beatOrigin`. `beatOrigin` effectively acts as a monotonic sequence number within the session.
+* **numPeers Semantics**: The API exposed `numPeers` count strictly reflects the number of peers *currently in the same session*. It does not include peers on the network that are in different sessions (e.g. due to having older clocks).
 * **Founder Leaves**: If the session's founding peer leaves, the `SessionId` does not change. The remaining peers continue to broadcast and use the same `SessionId`.
 
 ## 7. Start/Stop State
