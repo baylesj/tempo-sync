@@ -1,5 +1,7 @@
 # Web Tempo Sync (Ableton Link compatible)
 
+Part of **Web Tempo Sync**: [spec and explainer](https://github.com/baylesj/web-tempo-sync) · [implementation and extension](https://github.com/baylesj/tempo-sync) · [demo](https://github.com/baylesj/web-tempo-sync-demo) · [all repos](https://github.com/search?q=topic%3Aweb-tempo-sync+user%3Abaylesj&type=repositories)
+
 A Rust implementation of the Web Tempo Sync protocol (compatible with Ableton Link).
 
 ## Design
