@@ -1,6 +1,9 @@
 #!/bin/sh
-# Builds tempo-sync-host and registers it with Chrome and Chromium for this user, so the
-# Web Tempo Sync extension can start it. Pass --uninstall to remove the registrations.
+# Registers tempo-sync-host with Chrome and Chromium for this user, so the Web Tempo Sync
+# extension can start it. Pass --uninstall to remove the registrations.
+#
+# In the download bundle the helper is prebuilt, at ../bin/tempo-sync-host; in the repo, this
+# builds it with cargo.
 #
 # macOS and Linux only. Windows registers native hosts in the registry instead; see
 # https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging#native-messaging-host-location
@@ -41,9 +44,13 @@ if [ "${1:-}" = "--uninstall" ]; then
   exit 0
 fi
 
-repo="$(cd "$(dirname "$0")/.." && pwd)"
-cargo build --release --manifest-path "$repo/Cargo.toml" -p tempo-sync-host
-binary="$repo/target/release/tempo-sync-host"
+top="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -x "$top/bin/tempo-sync-host" ]; then
+  binary="$top/bin/tempo-sync-host"
+else
+  cargo build --release --manifest-path "$top/Cargo.toml" -p tempo-sync-host
+  binary="$top/target/release/tempo-sync-host"
+fi
 
 for dir in $(profiles); do
   # Only register with browsers that are installed (their profile directory exists).
