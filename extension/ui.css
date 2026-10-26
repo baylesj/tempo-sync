@@ -1,0 +1,46 @@
+/* The bayl.es palette, with the tempo sync demo's purple signature. Kept local so the
+   permission prompt never waits on the network. */
+:root {
+  color-scheme: light dark;
+  --ink: #14282b;
+  --soft: #4e6b6e;
+  --line: #e4ebec;
+  --ground: #fbfcfc;
+  --field: #fff;
+  --sig: #5b4be0;
+  --on-sig: #fff;
+  --green: #007b52;
+  --orange: #b64914;
+  --sans: "Schibsted Grotesk", -apple-system, system-ui, sans-serif;
+  --mono: "Fira Code", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ink: #d9e9e8;
+    --soft: #9dbab9;
+    --line: #16353a;
+    --ground: #0a1f22;
+    --field: #0e282c;
+    --sig: #9184f5;
+    --on-sig: #0a1f22;
+    --green: #55e0a6;
+    --orange: #f2925c;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; padding: 16px; background: var(--ground); color: var(--ink); font: 14px/1.45 var(--sans); }
+h1 { margin: 0 0 8px; font-size: 15px; font-weight: 600; }
+p { margin: 0 0 12px; color: var(--soft); }
+code, .mono { font-family: var(--mono); font-size: 13px; color: var(--ink); }
+button { font: inherit; padding: 6px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--field); color: var(--ink); cursor: pointer; }
+button.primary { background: var(--sig); border-color: var(--sig); color: var(--on-sig); }
+button.link { border: 0; background: none; padding: 0; color: var(--sig); }
+.row { display: flex; gap: 8px; align-items: center; }
+.end { justify-content: flex-end; }
+.ok { color: var(--green); }
+.warn { color: var(--orange); }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 0 0 12px; }
+dt { color: var(--soft); }
+dd { margin: 0; }
+ul { list-style: none; margin: 0; padding: 0; }
+li { display: flex; justify-content: space-between; gap: 8px; padding: 4px 0; border-top: 1px solid var(--line); }

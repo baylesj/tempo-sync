@@ -1,0 +1,10 @@
+[package]
+name = "tempo-sync-host"
+version = "0.1.0"
+edition = "2021"
+description = "Native messaging host that lets the Web Tempo Sync extension join Link sessions"
+
+[dependencies]
+serde_json = "1"
+tempo-sync-core = { path = "../tempo-sync-core" }
+tempo-sync-std = { path = "../tempo-sync-std" }

@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "Web Tempo Sync (prototype)",
+  "version": "0.1.0",
+  "description": "Adds navigator.tempoSync to secure pages, joining Link sessions on the local network through the tempo-sync-host helper.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4Haj4LQQQEcxhWkOZznYpC6JPOpXD4sH8tVYivbCw+ft8fS7xakU7gznVg1mB+ezlWi8JJYBQuhp/kRWWyy8AsuJ6JYGoKs0T6Qk/MxFLlEEQvDQOobBwBXKyHYE82bFrj/vPQyww4oUK2Omk/+9CJkGztgYsTaLl6vA8eiGHGkQ2skL0JD01Shj92teQcMOE+FXtxph3D4/nv7WFEmKrk5n6df3xHuZ3CrabauNCvhzRUqDgbuujpW2rBTagROXRLmHhwMykSC1AWGBeyn1AKAtdeNKU4flcNhAqIgYsg9DutCDZvtxefXHA4VQc6ooMOJJe0/5mp5N0NSMo3aQnwIDAQAB",
+  "minimum_chrome_version": "111",
+  "permissions": ["nativeMessaging", "storage"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [
+    { "matches": ["<all_urls>"], "js": ["page.js"], "run_at": "document_start", "world": "MAIN" },
+    { "matches": ["<all_urls>"], "js": ["bridge.js"], "run_at": "document_start" }
+  ],
+  "action": { "default_title": "Web Tempo Sync", "default_popup": "popup.html" }
+}

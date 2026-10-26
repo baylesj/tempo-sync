@@ -10,6 +10,7 @@ use tempo_sync_core::{
     Engine, HostTime, InterfaceId, NodeId, Output, SessionState, SocketAddrPlain,
 };
 
+#[derive(Clone)]
 pub struct Clock {
     epoch: Instant,
     offset_us: i64,
@@ -114,6 +115,13 @@ impl Runtime {
             tx,
             ifaces,
         }
+    }
+
+    /// The clock the runtime stamps session times with. On platforms without a raw monotonic
+    /// clock each `Clock::new()` counts from its own epoch, so callers that convert session
+    /// times must read this one rather than make their own.
+    pub fn clock(&self) -> Clock {
+        self.clock.clone()
     }
 
     pub fn handle(&self) -> SessionHandle {

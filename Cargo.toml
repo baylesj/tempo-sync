@@ -3,6 +3,7 @@ members = [
     "crates/tempo-sync-core",
     "crates/tempo-sync-sim",
     "crates/tempo-sync-std",
+    "crates/tempo-sync-host",
     "crates/tempohut"
 ]
 resolver = "2"
