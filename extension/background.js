@@ -18,6 +18,17 @@ function anySessions() {
   return [...clients.values()].some((c) => c.sessions.size);
 }
 
+// Pages count other tabs' sessions as participants (for hasPeers, and so starting a loop in
+// one tab waits for the bar line instead of moving another tab's), so they need the total.
+function broadcastSessions() {
+  const count = [...clients.values()].reduce((n, c) => n + c.sessions.size, 0);
+  for (const c of clients.values()) {
+    if (c.sessions.size) {
+      c.port.postMessage({ type: 'sessions', count });
+    }
+  }
+}
+
 function startHost() {
   if (ready) {
     return ready;
@@ -149,6 +160,7 @@ async function open(client, id) {
   }
   client.sessions.add(id);
   client.port.postMessage(lastState);
+  broadcastSessions();
   reply();
 }
 
@@ -165,6 +177,7 @@ chrome.runtime.onConnect.addListener((port) => {
         break;
       case 'close':
         client.sessions.delete(msg.id);
+        broadcastSessions();
         stopHostIfIdle();
         break;
       case 'ping':
@@ -182,6 +195,7 @@ chrome.runtime.onConnect.addListener((port) => {
   });
   port.onDisconnect.addListener(() => {
     clients.delete(client.id);
+    broadcastSessions();
     stopHostIfIdle();
   });
 });

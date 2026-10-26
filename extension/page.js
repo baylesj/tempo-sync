@@ -3,9 +3,12 @@
 // Runs in the page's own world so pages get ordinary objects. bridge.js, in the extension's
 // isolated world, carries messages to the service worker and keeps the clock offset.
 //
-// The host keeps session times as integers in its own clock: microseconds, micro-beats and
-// microseconds per beat. They're converted to and from page seconds only at captureState()
-// and commitState(), so a state captured and committed unchanged round-trips exactly.
+// The host keeps the shared timeline as integers in its own clock: microseconds, micro-beats
+// and microseconds per beat. They're converted to page seconds at captureState() and back at
+// commitState(). Each session's beat offset (its own beat numbering) never leaves the page.
+//
+// Not polyfilled: TempoSessionState isn't [Serializable] here, since an extension can't reach
+// a page's workers or worklets.
 (() => {
   if (!window.isSecureContext || 'tempoSync' in Navigator.prototype) {
     return;
@@ -16,7 +19,9 @@
   const illegal = () => new TypeError('Illegal constructor');
 
   let hostState = null;
-  let numPeers = 0;
+  let networkPeers = 0;
+  // Open sessions in the whole browser, this document's included.
+  let browserSessions = 0;
   // host µs = performance.now() * 1000 + offsetUs, measured by bridge.js.
   let offsetUs = 0;
   const sessions = new Set();
@@ -28,6 +33,7 @@
   let readState;
 
   const post = (msg) => window.postMessage({ [TAG]: 'page', msg }, '*');
+  const hasOthers = () => networkPeers > 0 || browserSessions > 1;
 
   // WebIDL `double`: anything that converts to a non-finite number is a TypeError.
   function toDouble(value, name) {
@@ -38,10 +44,26 @@
     return n;
   }
 
+  const phase = (beat, q) => ((beat % q) + q) % q;
+
+  // The beat offset rounded to a multiple of q, halves going up, as the draft defines it.
+  const offsetFor = (offset, q) => q * Math.floor(offset / q + 0.5);
+
+  // Two host timelines are the same line if they agree on tempo and on the beat at one time.
+  // The host re-anchors a committed timeline, so comparing fields alone would see changes
+  // that aren't there.
+  function sameTimeline(a, b) {
+    if (a.tempo !== b.tempo) {
+      return false;
+    }
+    const beatAtB = a.beatOrigin + ((b.timeOrigin - a.timeOrigin) / a.tempo) * 1e6;
+    return Math.abs(beatAtB - b.beatOrigin) <= 2;
+  }
+
   // AudioContext time = page seconds - audioOffset(context). getOutputTimestamp() pairs the
   // context time now reaching the speakers with the page time it got there, so this maps to
-  // hardware time. It steps by a render quantum, so follow it slowly unless it jumps
-  // (device change, suspend and resume).
+  // output time. It steps by a render quantum, so follow it slowly unless it jumps (device
+  // change, suspend and resume).
   const audioOffsets = new WeakMap();
   function audioOffset(context) {
     if (!(context instanceof AudioContext)) {
@@ -59,13 +81,21 @@
     return next;
   }
 
-  function applyState(state, peers) {
-    const prev = hostState;
-    const prevPeers = numPeers;
+  // Events are queued, as the draft says, so a commit's own events arrive after it returns.
+  function applyHostUpdate({ state = hostState, peers = networkPeers, count = browserSessions }) {
+    const before = { state: hostState, others: hasOthers() };
     hostState = state;
-    numPeers = peers;
-    for (const session of sessions) {
-      notifySession(session, prev, prevPeers);
+    networkPeers = peers;
+    browserSessions = count;
+    const changes = {
+      timeline: before.state && !sameTimeline(before.state, hostState),
+      playing: before.state && (before.state.isPlaying !== hostState.isPlaying
+        || before.state.startStopTime !== hostState.startStopTime),
+      peers: before.others !== hasOthers(),
+    };
+    if (changes.timeline || changes.playing || changes.peers) {
+      const targets = [...sessions];
+      setTimeout(() => targets.forEach((s) => notifySession(s, changes)));
     }
   }
 
@@ -93,13 +123,15 @@
     #session;
     #toHost;
     #tempo;
-    #beatOrigin;
     #timeOrigin;
+    #beatOrigin;
+    #offset;
     #quantum;
-    #isPlaying;
-    #timeForIsPlaying;
-    // Micro-beats as the host had them, until setIsPlaying() makes us work it out again.
-    #startStopBeat;
+    #playing;
+    #playingTime;
+    #solo;
+    #timelineChanged = false;
+    #playingChanged = false;
     #committed = false;
 
     constructor(t, session, fields, toHost) {
@@ -109,12 +141,13 @@
       this.#session = session;
       this.#toHost = toHost;
       this.#tempo = fields.tempo;
-      this.#beatOrigin = fields.beatOrigin;
       this.#timeOrigin = fields.timeOrigin;
+      this.#beatOrigin = fields.beatOrigin;
+      this.#offset = fields.offset;
       this.#quantum = fields.quantum;
-      this.#isPlaying = fields.isPlaying;
-      this.#timeForIsPlaying = fields.timeForIsPlaying;
-      this.#startStopBeat = fields.startStopBeat;
+      this.#playing = fields.playing;
+      this.#playingTime = fields.playingTime;
+      this.#solo = fields.solo;
     }
 
     #q(quantum) {
@@ -125,16 +158,39 @@
       return q > 0 ? q : this.#quantum;
     }
 
+    #sharedBeat(time) {
+      return this.#beatOrigin + (time - this.#timeOrigin) * (this.#tempo / 60);
+    }
+
+    #sharedTime(beat) {
+      return this.#timeOrigin + (beat - this.#beatOrigin) * (60 / this.#tempo);
+    }
+
     get tempo() {
       return this.#tempo;
     }
 
     get isPlaying() {
-      return this.#isPlaying;
+      return this.#playing;
     }
 
     get timeForIsPlaying() {
-      return this.#timeForIsPlaying;
+      return this.#playingTime;
+    }
+
+    beatAtTime(time, quantum) {
+      time = toDouble(time, 'time');
+      return this.#sharedBeat(time) + offsetFor(this.#offset, this.#q(quantum));
+    }
+
+    timeAtBeat(beat, quantum) {
+      beat = toDouble(beat, 'beat');
+      return this.#sharedTime(beat - offsetFor(this.#offset, this.#q(quantum)));
+    }
+
+    phaseAtTime(time, quantum) {
+      time = toDouble(time, 'time');
+      return phase(this.#sharedBeat(time), this.#q(quantum));
     }
 
     setTempo(bpm, atTime) {
@@ -143,57 +199,54 @@
       if (bpm <= 0) {
         throw new RangeError('bpm must be positive');
       }
-      const currentBeat = this.beatAtTime(atTime);
+      this.#beatOrigin = this.#sharedBeat(atTime);
       this.#timeOrigin = atTime;
-      this.#beatOrigin = currentBeat;
       this.#tempo = bpm;
+      this.#timelineChanged = true;
     }
 
-    // `quantum` is accepted and ignored here, as in the draft (see its issue on this method).
-    beatAtTime(time, quantum) {
-      time = toDouble(time, 'time');
-      this.#q(quantum);
-      return this.#beatOrigin + (time - this.#timeOrigin) * (this.#tempo / 60);
-    }
-
-    phaseAtTime(time, quantum) {
-      const q = this.#q(quantum);
-      const beat = this.beatAtTime(time);
-      return ((beat % q) + q) % q;
-    }
-
-    timeAtBeat(beat, quantum) {
-      beat = toDouble(beat, 'beat');
-      this.#q(quantum);
-      return this.#timeOrigin + (beat - this.#beatOrigin) * (60 / this.#tempo);
-    }
-
+    // Alone, put `beat` at `time`. With others, wait for the next point where the session's
+    // phase matches `beat`'s and number it `beat`, changing only this session's numbering.
     requestBeatAtTime(beat, time, quantum) {
       beat = toDouble(beat, 'beat');
       time = toDouble(time, 'time');
       const q = this.#q(quantum);
-      const currentBeat = this.beatAtTime(time);
-      const phaseDelta = (((beat - currentBeat) % q) + q) % q;
-      this.#timeOrigin = time;
-      this.#beatOrigin = currentBeat + phaseDelta;
+      if (this.#solo) {
+        this.forceBeatAtTime(beat, time, q);
+        return;
+      }
+      const current = this.beatAtTime(time, q);
+      const launch = current + phase(phase(beat, q) - phase(current, q), q);
+      this.#offset = beat - this.#sharedBeat(this.timeAtBeat(launch, q));
     }
 
+    // Moves the bar lines for everyone, by at most half a quantum.
     forceBeatAtTime(beat, time, quantum) {
       beat = toDouble(beat, 'beat');
       time = toDouble(time, 'time');
-      this.#q(quantum);
+      const q = this.#q(quantum);
+      const current = this.#sharedBeat(time);
+      let shift = phase(phase(beat, q) - phase(current, q), q);
+      if (shift > q / 2) {
+        shift -= q;
+      }
       this.#timeOrigin = time;
-      this.#beatOrigin = beat;
+      this.#beatOrigin = current + shift;
+      this.#offset = beat - (current + shift);
+      this.#timelineChanged = true;
     }
 
     setIsPlaying(playing, atTime) {
       atTime = toDouble(atTime, 'atTime');
-      this.#isPlaying = Boolean(playing);
-      this.#timeForIsPlaying = atTime;
-      this.#startStopBeat = null;
+      this.#playing = Boolean(playing);
+      this.#playingTime = atTime;
+      this.#playingChanged = true;
     }
 
     static {
+      // What commitState() needs: the new beat offset, and the host state to share, if the
+      // state changed any of it. Unchanged parts come from the latest host state, so a stale
+      // snapshot doesn't undo another participant's change.
       readState = (state, session) => {
         if (state.#session !== session) {
           throw new DOMException('This state was captured from another session', 'InvalidModificationError');
@@ -202,15 +255,22 @@
           throw new DOMException('This state was already committed', 'InvalidStateError');
         }
         state.#committed = true;
+        if (!state.#timelineChanged && !state.#playingChanged) {
+          return { offset: state.#offset, share: null };
+        }
         const toHost = state.#toHost;
-        return {
-          tempo: Math.round(60e6 / state.#tempo),
-          beatOrigin: Math.round(state.#beatOrigin * 1e6),
-          timeOrigin: toHost(state.#timeOrigin),
-          isPlaying: state.#isPlaying,
-          startStopBeat: state.#startStopBeat ?? Math.round(state.beatAtTime(state.#timeForIsPlaying) * 1e6),
-          startStopTime: toHost(state.#timeForIsPlaying),
-        };
+        const share = { ...hostState };
+        if (state.#timelineChanged) {
+          share.tempo = Math.round(60e6 / state.#tempo);
+          share.beatOrigin = Math.round(state.#beatOrigin * 1e6);
+          share.timeOrigin = toHost(state.#timeOrigin);
+        }
+        if (state.#playingChanged) {
+          share.isPlaying = state.#playing;
+          share.startStopTime = toHost(state.#playingTime);
+          share.startStopBeat = Math.round(state.#sharedBeat(state.#playingTime) * 1e6);
+        }
+        return { offset: state.#offset, share };
       };
     }
   }
@@ -218,6 +278,7 @@
   class TempoSession extends EventTarget {
     #id;
     #quantum;
+    #offset = 0;
     #closed = false;
 
     constructor(t, id, quantum) {
@@ -229,8 +290,8 @@
       this.#quantum = quantum;
     }
 
-    get numPeers() {
-      return numPeers;
+    get hasPeers() {
+      return hasOthers();
     }
 
     get quantum() {
@@ -250,12 +311,13 @@
       const toHost = (seconds) => Math.round((seconds + contextOffset) * 1e6 + offset);
       return new TempoSessionState(token, this, {
         tempo: 60e6 / hostState.tempo,
-        beatOrigin: hostState.beatOrigin / 1e6,
         timeOrigin: toLocal(hostState.timeOrigin),
+        beatOrigin: hostState.beatOrigin / 1e6,
+        offset: this.#offset,
         quantum: this.#quantum,
-        isPlaying: hostState.isPlaying,
-        timeForIsPlaying: toLocal(hostState.startStopTime),
-        startStopBeat: hostState.startStopBeat,
+        playing: hostState.isPlaying,
+        playingTime: toLocal(hostState.startStopTime),
+        solo: !hasOthers(),
       }, toHost);
     }
 
@@ -266,10 +328,13 @@
       if (!(state instanceof TempoSessionState)) {
         throw new TypeError('commitState() takes a TempoSessionState');
       }
-      const next = readState(state, this);
-      // Show the change to this document now; the host echoes it once it's applied.
-      applyState(next, numPeers);
-      post({ type: 'commit', state: next });
+      const { offset, share } = readState(state, this);
+      this.#offset = offset;
+      if (share) {
+        // Show the change in this document now; the host echoes it once it's applied.
+        applyHostUpdate({ state: share });
+        post({ type: 'commit', state: share });
+      }
     }
 
     close() {
@@ -281,23 +346,26 @@
       post({ type: 'close', id: this.#id });
     }
 
-    #fire(prev, prevPeers) {
-      if (prev && prev.tempo !== hostState.tempo) {
-        this.dispatchEvent(new Event('tempochange'));
+    #fire(changes) {
+      if (this.#closed) {
+        return;
       }
-      if (prev && prev.isPlaying !== hostState.isPlaying) {
+      if (changes.timeline) {
+        this.dispatchEvent(new Event('timelinechange'));
+      }
+      if (changes.playing) {
         this.dispatchEvent(new Event('playingchange'));
       }
-      if (prevPeers !== numPeers) {
-        this.dispatchEvent(new Event('numpeerschange'));
+      if (changes.peers) {
+        this.dispatchEvent(new Event('peerschange'));
       }
     }
 
     static {
-      notifySession = (session, prev, prevPeers) => session.#fire(prev, prevPeers);
+      notifySession = (session, changes) => session.#fire(changes);
     }
   }
-  for (const type of ['numpeerschange', 'tempochange', 'playingchange']) {
+  for (const type of ['peerschange', 'timelinechange', 'playingchange']) {
     defineHandler(TempoSession.prototype, type);
   }
 
@@ -343,7 +411,10 @@
     const msg = event.data.msg;
     switch (msg.type) {
       case 'state':
-        applyState(msg.state, msg.numPeers);
+        applyHostUpdate({ state: msg.state, peers: msg.numPeers });
+        break;
+      case 'sessions':
+        applyHostUpdate({ count: msg.count });
         break;
       case 'clock':
         offsetUs = msg.offsetUs;
@@ -367,8 +438,8 @@
           request.reject(new DOMException(msg.message, 'NotSupportedError'));
         }
         opening.clear();
-        if (numPeers !== 0) {
-          applyState(hostState, 0);
+        if (hostState) {
+          applyHostUpdate({ peers: 0, count: sessions.size });
         }
         break;
     }

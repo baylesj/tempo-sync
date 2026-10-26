@@ -111,6 +111,7 @@ async function onWorkerMessage(msg) {
       onPong(msg);
       break;
     case 'state':
+    case 'sessions':
       toPage(msg);
       break;
     case 'opened':

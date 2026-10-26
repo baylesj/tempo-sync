@@ -66,6 +66,9 @@ page.js (page's world)  ⇄ postMessage ⇄  bridge.js (content script)  ⇄ por
 
 ## Differences from the draft
 
+- `TempoSessionState` isn't serializable: an extension can't reach a page's workers or
+  worklets, so snapshots can't be posted to them.
+
 - `startStopSync` is accepted and ignored, as in the Chromium prototype.
 - `commitState()` isn't rate limited yet.
 
