@@ -1,4 +1,4 @@
-From 2a8e2d67eacbcc9ea7bb2d2f8dc302fdce8ce22b Mon Sep 17 00:00:00 2001
+From acc56b43bb90265a4493a521999a96e913480cd0 Mon Sep 17 00:00:00 2001
 From: Jordan Bayles <jophba@chromium.org>
 Date: Mon, 26 Oct 2026 18:07:43 +0000
 Subject: [PATCH] Prototype Web Tempo Sync API (navigator.tempoSync), v0.2
@@ -30,6 +30,11 @@ Changes since v0.1, for the current draft:
   20808: a private session for tests, invisible to real Link apps.
 - tempo_sync_core is refreshed from the crate (session close/BYEBYE,
   interop fixes).
+- TempoSessionState computes beat/time conversions in double seconds
+  anchored to Performance.timeOrigin (or AudioContext output timestamp)
+  so beatAtTime(timeAtBeat(b)) round-trips without microsecond truncation
+  or timer clamping jitter, and FakeTempoSyncEngine resets when all
+  sessions close.
 
 Not yet: [Serializable] snapshots in Workers and AudioWorklets, a
 permission prompt, and rate-limiting shared changes.
@@ -37,8 +42,8 @@ permission prompt, and rate-limiting shared changes.
  content/browser/BUILD.gn                      |  19 +
  content/browser/browser_interface_binders.cc  |   4 +
  content/browser/tempo_sync/README.md          |  40 ++
- .../tempo_sync/fake_tempo_sync_engine.cc      |  57 ++
- .../tempo_sync/fake_tempo_sync_engine.h       |  33 +
+ .../tempo_sync/fake_tempo_sync_engine.cc      |  68 ++
+ .../tempo_sync/fake_tempo_sync_engine.h       |  34 +
  .../tempo_sync/rust_tempo_sync_bridge.rs      | 215 ++++++
  .../tempo_sync/rust_tempo_sync_engine.cc      | 475 +++++++++++++
  .../tempo_sync/rust_tempo_sync_engine.h       |  49 ++
@@ -59,12 +64,12 @@ permission prompt, and rate-limiting shared changes.
  .../tempo_sync/navigator_tempo_sync.cc        |  39 ++
  .../modules/tempo_sync/navigator_tempo_sync.h |  34 +
  .../tempo_sync/navigator_tempo_sync.idl       |   6 +
- .../modules/tempo_sync/tempo_session.cc       | 248 +++++++
+ .../modules/tempo_sync/tempo_session.cc       | 247 +++++++
  .../modules/tempo_sync/tempo_session.h        |  92 +++
  .../modules/tempo_sync/tempo_session.idl      |  13 +
  .../tempo_sync/tempo_session_options.idl      |   5 +
- .../modules/tempo_sync/tempo_session_state.cc | 173 +++++
- .../modules/tempo_sync/tempo_session_state.h  |  90 +++
+ .../modules/tempo_sync/tempo_session_state.cc | 171 +++++
+ .../modules/tempo_sync/tempo_session_state.h  |  91 +++
  .../tempo_sync/tempo_session_state.idl        |  18 +
  .../renderer/modules/tempo_sync/tempo_sync.cc |  93 +++
  .../renderer/modules/tempo_sync/tempo_sync.h  |  52 ++
@@ -86,7 +91,7 @@ permission prompt, and rate-limiting shared changes.
  third_party/tempo_sync_core/src/time.rs       |  49 ++
  third_party/tempo_sync_core/src/timeline.rs   | 179 +++++
  third_party/tempo_sync_core/src/wire.rs       | 400 +++++++++++
- 52 files changed, 3683 insertions(+)
+ 52 files changed, 3693 insertions(+)
  create mode 100644 content/browser/tempo_sync/README.md
  create mode 100644 content/browser/tempo_sync/fake_tempo_sync_engine.cc
  create mode 100644 content/browser/tempo_sync/fake_tempo_sync_engine.h
@@ -130,10 +135,10 @@ permission prompt, and rate-limiting shared changes.
  create mode 100644 third_party/tempo_sync_core/src/wire.rs
 
 diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
-index 637d34d..551ef5c 100644
+index cda5d70..5f7f7f8a 100644
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
-@@ -142,6 +142,7 @@ source_set("browser") {
+@@ -132,6 +132,7 @@ source_set("browser") {
    ldflags = []
  
    deps = [
@@ -141,7 +146,7 @@ index 637d34d..551ef5c 100644
      ":child_process_security_policy_impl",
      "//base",
      "//base:base_static",
-@@ -340,6 +341,7 @@ source_set("browser") {
+@@ -329,6 +330,7 @@ source_set("browser") {
      "//third_party/blink/public/common",
      "//third_party/blink/public/common:font_enumeration_table_proto",
      "//third_party/blink/public/common:preloading_headers",
@@ -149,7 +154,7 @@ index 637d34d..551ef5c 100644
      "//third_party/blink/public/mojom/webnn",
      "//third_party/blink/public/strings",
      "//third_party/boringssl",
-@@ -1307,6 +1309,15 @@ source_set("browser") {
+@@ -1305,6 +1307,15 @@ source_set("browser") {
      "media/session/media_session_uma_helper.h",
      "media/system_media_controls/system_media_controls_notifier.cc",
      "media/system_media_controls/system_media_controls_notifier.h",
@@ -165,7 +170,7 @@ index 637d34d..551ef5c 100644
      "media/webaudio/audio_context_manager_impl.cc",
      "media/webaudio/audio_context_manager_impl.h",
      "media_session/media_session_service.cc",
-@@ -3739,3 +3750,11 @@ fuzzer_test("content_sms_parser_fuzzer") {
+@@ -3732,3 +3743,11 @@ fuzzer_test("content_sms_parser_fuzzer") {
      "//content/public/renderer:renderer_sources",
    ]
  }
@@ -178,7 +183,7 @@ index 637d34d..551ef5c 100644
 +  deps = [ "//third_party/tempo_sync_core" ]
 +}
 diff --git a/content/browser/browser_interface_binders.cc b/content/browser/browser_interface_binders.cc
-index ce85357..429194a 100644
+index ec3892a..6398e38c 100644
 --- a/content/browser/browser_interface_binders.cc
 +++ b/content/browser/browser_interface_binders.cc
 @@ -25,6 +25,7 @@
@@ -189,7 +194,7 @@ index ce85357..429194a 100644
  #include "content/browser/browser_context_impl.h"
  #include "content/browser/browser_main_loop.h"
  #include "content/browser/connection_allowlist_utils.h"
-@@ -1222,6 +1223,9 @@ void PopulateBinderMapWithContext(
+@@ -1221,6 +1222,9 @@ void PopulateBinderMapWithContext(
          &BindWebNNWeightsFileCreatorForRenderFrame);
    }
  
@@ -247,10 +252,10 @@ index 0000000..598f5f9
 +*   **IPv4 Only**: Only IPv4 multicast (`224.76.78.75`) and IPv4 network interfaces are currently supported.
 diff --git a/content/browser/tempo_sync/fake_tempo_sync_engine.cc b/content/browser/tempo_sync/fake_tempo_sync_engine.cc
 new file mode 100644
-index 0000000..892bac9
+index 0000000..9fd172b
 --- /dev/null
 +++ b/content/browser/tempo_sync/fake_tempo_sync_engine.cc
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,68 @@
 +#include "content/browser/tempo_sync/fake_tempo_sync_engine.h"
 +
 +namespace content {
@@ -278,6 +283,17 @@ index 0000000..892bac9
 +
 +void FakeTempoSyncEngine::RemoveObserver(Observer* observer) {
 +  observers_.RemoveObserver(observer);
++}
++
++void FakeTempoSyncEngine::SetEnabled(bool enabled) {
++  if (!enabled) {
++    timeline_->tempo_bpm = 120.0;
++    timeline_->beat_origin = 0.0;
++    timeline_->time_origin = base::TimeTicks::Now();
++    start_stop_->is_playing = true;
++    start_stop_->beat = 0.0;
++    start_stop_->time = base::TimeTicks::Now();
++  }
 +}
 +
 +void FakeTempoSyncEngine::SetTimeline(blink::mojom::TimelinePtr timeline) {
@@ -310,10 +326,10 @@ index 0000000..892bac9
 +}  // namespace content
 diff --git a/content/browser/tempo_sync/fake_tempo_sync_engine.h b/content/browser/tempo_sync/fake_tempo_sync_engine.h
 new file mode 100644
-index 0000000..c565353
+index 0000000..2c638e6
 --- /dev/null
 +++ b/content/browser/tempo_sync/fake_tempo_sync_engine.h
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,34 @@
 +#ifndef CONTENT_BROWSER_TEMPO_SYNC_FAKE_TEMPO_SYNC_ENGINE_H_
 +#define CONTENT_BROWSER_TEMPO_SYNC_FAKE_TEMPO_SYNC_ENGINE_H_
 +
@@ -330,6 +346,7 @@ index 0000000..c565353
 +  // TempoSyncEngine
 +  void AddObserver(Observer* observer) override;
 +  void RemoveObserver(Observer* observer) override;
++  void SetEnabled(bool enabled) override;
 +
 +  void SetTimeline(blink::mojom::TimelinePtr timeline) override;
 +  void SetStartStop(blink::mojom::StartStopStatePtr state) override;
@@ -350,7 +367,7 @@ index 0000000..c565353
 \ No newline at end of file
 diff --git a/content/browser/tempo_sync/rust_tempo_sync_bridge.rs b/content/browser/tempo_sync/rust_tempo_sync_bridge.rs
 new file mode 100644
-index 0000000..438790e
+index 0000000..438790e1
 --- /dev/null
 +++ b/content/browser/tempo_sync/rust_tempo_sync_bridge.rs
 @@ -0,0 +1,215 @@
@@ -1423,7 +1440,7 @@ index 0000000..0284b81
 +#endif  // CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SYNC_SERVICE_IMPL_H_
 \ No newline at end of file
 diff --git a/third_party/blink/public/mojom/BUILD.gn b/third_party/blink/public/mojom/BUILD.gn
-index 043558b..48bd8a1 100644
+index dfbc3391..5b72645 100644
 --- a/third_party/blink/public/mojom/BUILD.gn
 +++ b/third_party/blink/public/mojom/BUILD.gn
 @@ -279,6 +279,7 @@ mojom("mojom_platform") {
@@ -1573,7 +1590,7 @@ index 9b0b898..3964cb4 100644
      "//third_party/blink/renderer/modules/webshare",
 diff --git a/third_party/blink/renderer/modules/tempo_sync/BUILD.gn b/third_party/blink/renderer/modules/tempo_sync/BUILD.gn
 new file mode 100644
-index 0000000..ee9d4d7
+index 0000000..ee9d4d76
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/BUILD.gn
 @@ -0,0 +1,17 @@
@@ -1706,10 +1723,10 @@ index 0000000..13156fb
 +};
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session.cc b/third_party/blink/renderer/modules/tempo_sync/tempo_session.cc
 new file mode 100644
-index 0000000..f2000cb
+index 0000000..59d9857
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session.cc
-@@ -0,0 +1,248 @@
+@@ -0,0 +1,247 @@
 +#include "third_party/blink/renderer/modules/tempo_sync/tempo_session.h"
 +
 +#include <cmath>
@@ -1823,9 +1840,8 @@ index 0000000..f2000cb
 +  } else {
 +    LocalDOMWindow* window = To<LocalDOMWindow>(GetExecutionContext());
 +    WindowPerformance* performance = DOMWindowPerformance::performance(*window);
-+    host_time_origin = base::TimeTicks::Now();
-+    local_time_origin =
-+        performance->MonotonicTimeToDOMHighResTimeStamp(host_time_origin) / 1000.0;
++    host_time_origin = performance->GetTimeOriginInternal();
++    local_time_origin = 0.0;
 +  }
 +
 +  return MakeGarbageCollected<TempoSessionState>(
@@ -2088,10 +2104,10 @@ index 0000000..9af3c4d
 +};
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.cc b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.cc
 new file mode 100644
-index 0000000..3a4d051
+index 0000000..0b2949b
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.cc
-@@ -0,0 +1,173 @@
+@@ -0,0 +1,171 @@
 +#include "third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h"
 +
 +#include <cmath>
@@ -2124,6 +2140,7 @@ index 0000000..3a4d051
 +      start_stop_(std::move(start_stop)),
 +      host_time_origin_(host_time_origin),
 +      local_time_origin_(local_time_origin),
++      time_origin_local_(HostToLocalTime(timeline_->time_origin)),
 +      beat_offset_(beat_offset),
 +      default_quantum_(default_quantum),
 +      solo_(solo) {}
@@ -2140,11 +2157,11 @@ index 0000000..3a4d051
 +    return;
 +  }
 +  // Keep the beat at |at_time|: the new tempo starts from there.
-+  base::TimeTicks host_time = LocalToHostTime(at_time);
-+  double beat = SharedBeatAt(host_time);
++  double beat = SharedBeatAt(at_time);
 +  timeline_->tempo_bpm = bpm;
-+  timeline_->time_origin = host_time;
++  timeline_->time_origin = LocalToHostTime(at_time);
 +  timeline_->beat_origin = beat;
++  time_origin_local_ = at_time;
 +  timeline_changed_ = true;
 +}
 +
@@ -2153,8 +2170,7 @@ index 0000000..3a4d051
 +}
 +
 +double TempoSessionState::beatAtTime(double time, double quantum) {
-+  return SharedBeatAt(LocalToHostTime(time)) +
-+         OffsetFor(EffectiveQuantum(quantum));
++  return SharedBeatAt(time) + OffsetFor(EffectiveQuantum(quantum));
 +}
 +
 +double TempoSessionState::phaseAtTime(double time) {
@@ -2163,7 +2179,7 @@ index 0000000..3a4d051
 +
 +double TempoSessionState::phaseAtTime(double time, double quantum) {
 +  // The shared phase: the same for every participant using this quantum.
-+  return Phase(SharedBeatAt(LocalToHostTime(time)), EffectiveQuantum(quantum));
++  return Phase(SharedBeatAt(time), EffectiveQuantum(quantum));
 +}
 +
 +double TempoSessionState::timeAtBeat(double beat) {
@@ -2171,8 +2187,7 @@ index 0000000..3a4d051
 +}
 +
 +double TempoSessionState::timeAtBeat(double beat, double quantum) {
-+  return HostToLocalTime(
-+      HostTimeAtSharedBeat(beat - OffsetFor(EffectiveQuantum(quantum))));
++  return LocalTimeAtSharedBeat(beat - OffsetFor(EffectiveQuantum(quantum)));
 +}
 +
 +void TempoSessionState::requestBeatAtTime(double beat, double time) {
@@ -2204,14 +2219,14 @@ index 0000000..3a4d051
 +                                        double quantum) {
 +  // Moves everyone's bar lines, by at most half a quantum, so |beat| falls at |time|.
 +  const double q = EffectiveQuantum(quantum);
-+  const base::TimeTicks host_time = LocalToHostTime(time);
-+  const double current = SharedBeatAt(host_time);
++  const double current = SharedBeatAt(time);
 +  double shift = Phase(Phase(beat, q) - Phase(current, q), q);
 +  if (shift > q / 2) {
 +    shift -= q;
 +  }
-+  timeline_->time_origin = host_time;
++  timeline_->time_origin = LocalToHostTime(time);
 +  timeline_->beat_origin = current + shift;
++  time_origin_local_ = time;
 +  beat_offset_ = beat - (current + shift);
 +  timeline_changed_ = true;
 +}
@@ -2225,10 +2240,9 @@ index 0000000..3a4d051
 +}
 +
 +void TempoSessionState::setIsPlaying(bool playing, double at_time) {
-+  base::TimeTicks host_time = LocalToHostTime(at_time);
 +  start_stop_->is_playing = playing;
-+  start_stop_->time = host_time;
-+  start_stop_->beat = SharedBeatAt(host_time);
++  start_stop_->time = LocalToHostTime(at_time);
++  start_stop_->beat = SharedBeatAt(at_time);
 +  playing_changed_ = true;
 +}
 +
@@ -2253,24 +2267,24 @@ index 0000000..3a4d051
 +  return local_time_origin_ + (host_time - host_time_origin_).InSecondsF();
 +}
 +
-+double TempoSessionState::SharedBeatAt(base::TimeTicks host_time) const {
-+  double elapsed_seconds = (host_time - timeline_->time_origin).InSecondsF();
++double TempoSessionState::SharedBeatAt(double local_time) const {
++  double elapsed_seconds = local_time - time_origin_local_;
 +  return timeline_->beat_origin + elapsed_seconds * (timeline_->tempo_bpm / 60.0);
 +}
 +
-+base::TimeTicks TempoSessionState::HostTimeAtSharedBeat(double beat) const {
++double TempoSessionState::LocalTimeAtSharedBeat(double beat) const {
 +  double elapsed_seconds =
 +      (beat - timeline_->beat_origin) / (timeline_->tempo_bpm / 60.0);
-+  return timeline_->time_origin + base::Seconds(elapsed_seconds);
++  return time_origin_local_ + elapsed_seconds;
 +}
 +
 +}  // namespace blink
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h
 new file mode 100644
-index 0000000..43d5c6c
+index 0000000..cc0f322
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,91 @@
 +#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_STATE_H_
 +#define THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_STATE_H_
 +
@@ -2340,14 +2354,15 @@ index 0000000..43d5c6c
 +
 +  base::TimeTicks LocalToHostTime(double local_time) const;
 +  double HostToLocalTime(base::TimeTicks host_time) const;
-+  double SharedBeatAt(base::TimeTicks host_time) const;
-+  base::TimeTicks HostTimeAtSharedBeat(double beat) const;
++  double SharedBeatAt(double local_time) const;
++  double LocalTimeAtSharedBeat(double beat) const;
 +
 +  Member<TempoSession> session_;
 +  mojom::blink::TimelinePtr timeline_;
 +  mojom::blink::StartStopStatePtr start_stop_;
 +  base::TimeTicks host_time_origin_;
 +  double local_time_origin_;
++  double time_origin_local_;
 +  double beat_offset_;
 +  double default_quantum_;
 +  // Whether no one else was in the session at capture: requestBeatAtTime() then places the
@@ -2363,7 +2378,7 @@ index 0000000..43d5c6c
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_STATE_H_
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.idl b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.idl
 new file mode 100644
-index 0000000..c1af119
+index 0000000..c1af119f
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.idl
 @@ -0,0 +1,18 @@
@@ -2557,7 +2572,7 @@ index 0000000..aee1ec2
 +  [CallWith=ScriptState, RaisesException] Promise<TempoSession> requestSession(optional TempoSessionOptions options = {});
 +};
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/third_party/blink/renderer/modules/webaudio/audio_context.cc
-index 1b7598b..e8cb85a 100644
+index 1b7598ba..e8cb85a 100644
 --- a/third_party/blink/renderer/modules/webaudio/audio_context.cc
 +++ b/third_party/blink/renderer/modules/webaudio/audio_context.cc
 @@ -2457,4 +2457,10 @@ void AudioContext::RejectPendingResumeResolversWithException(
@@ -2584,10 +2599,10 @@ index 5548c84..06d50d1 100644
    ScriptPromise<IDLUndefined> suspendContext(ScriptState*, ExceptionState&);
    ScriptPromise<IDLUndefined> closeContext(ScriptState*, ExceptionState&);
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-index a9c72eb..a26cc57 100644
+index bc09fbe..b6e099f 100644
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -7452,6 +7452,10 @@
+@@ -7359,6 +7359,10 @@
  
      // WebBluetooth is enabled by default on Android, ChromeOS, iOS, macOS and
      // Windows.
@@ -2665,7 +2680,7 @@ index 0000000..b199b9c
 \ No newline at end of file
 diff --git a/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-peers-manual.html b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-peers-manual.html
 new file mode 100644
-index 0000000..2ebcb4e
+index 0000000..2ebcb4e4
 --- /dev/null
 +++ b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-peers-manual.html
 @@ -0,0 +1,32 @@
@@ -4230,5 +4245,5 @@ index 0000000..5405e63
 +    }
 +}
 -- 
-2.54.0
+2.56.0.307.g5fe7bd680c-goog
 
