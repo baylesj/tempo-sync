@@ -7,7 +7,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use tempo_sync_core::{HostTime, NodeId};
-use tempo_sync_std::{Clock, Runtime, SessionHandle};
+use tempo_sync_std::{Clock, Runtime, SessionHandle, LINK_PORT};
 
 struct RawTerminal {
     orig: Option<libc::termios>,
@@ -129,6 +129,7 @@ fn run_tui(
     interval_ms: u64,
     ifaces: &[Ipv4Addr],
     node_id: NodeId,
+    port: u16,
 ) {
     let _term = RawTerminal::enter();
     let (tx, rx) = mpsc::channel();
@@ -140,7 +141,7 @@ fn run_tui(
         .collect::<Vec<_>>()
         .join(", ");
     let node_str = String::from_utf8_lossy(&node_id.0);
-    let mut last_action = String::from("Ready — listening on 224.76.78.75:20808");
+    let mut last_action = format!("Ready — listening on 224.76.78.75:{port}");
 
     loop {
         while let Ok(cmd) = rx.try_recv() {
@@ -239,7 +240,7 @@ fn run_tui(
                     "\x1b[1;36m┌──────────────────────────────────────────────────────────────────────┐\x1b[0m\x1b[K\r\n",
                     "\x1b[1;36m│\x1b[0m  \x1b[1;37mTempoHut\x1b[0m — Ableton Link / Web Tempo Sync Live Monitor               \x1b[1;36m│\x1b[0m\x1b[K\r\n",
                     "\x1b[1;36m└──────────────────────────────────────────────────────────────────────┘\x1b[0m\x1b[K\r\n",
-                    "  \x1b[2mNode:\x1b[0m {:<10}  \x1b[2mInterface:\x1b[0m {:<15}  \x1b[2mMulticast:\x1b[0m 224.76.78.75:20808\x1b[K\r\n",
+                    "  \x1b[2mNode:\x1b[0m {:<10}  \x1b[2mInterface:\x1b[0m {:<15}  \x1b[2mMulticast:\x1b[0m 224.76.78.75:{}\x1b[K\r\n",
                     "\x1b[K\r\n",
                     "  Status:    {}    {}\x1b[K\r\n",
                     "  Tempo:     \x1b[1;33m{:>7.2} BPM\x1b[0m      Quantum: \x1b[1;37m{:.0} beats/bar\x1b[0m\x1b[K\r\n",
@@ -257,6 +258,7 @@ fn run_tui(
                 ),
                 node_str,
                 iface_str,
+                port,
                 play_badge,
                 peer_badge,
                 bpm,
@@ -287,6 +289,7 @@ fn main() {
     let mut quantum = 4.0;
     let mut interval_ms: Option<u64> = None;
     let mut ifaces = Vec::new();
+    let mut port = LINK_PORT;
     let mut dump = false;
 
     let mut node_id = NodeId(*b"TempoHut");
@@ -296,7 +299,7 @@ fn main() {
         match args[i].as_str() {
             "--help" | "-h" => {
                 println!(
-                    "Usage: tempohut [--tui] [--json] [--tempo <bpm>] [--quantum <n>] [--interval-ms <n>] [--iface <ipv4>]..."
+                    "Usage: tempohut [--tui] [--json] [--tempo <bpm>] [--quantum <n>] [--interval-ms <n>] [--iface <ipv4>]... [--port <n>]"
                 );
                 return;
             }
@@ -321,6 +324,14 @@ fn main() {
                     if let Ok(ms) = args[i].parse::<u64>() {
                         interval_ms = Some(ms);
                     }
+                }
+            }
+            // A port other than Link's makes a private session, for tests that shouldn't meet real
+            // Link apps (or each other).
+            "--port" => {
+                i += 1;
+                if i < args.len() {
+                    port = args[i].parse().unwrap_or(port);
                 }
             }
             "--iface" => {
@@ -379,6 +390,7 @@ fn main() {
 
     let mut runtime = Runtime::new(node_id, ifaces.clone());
     runtime.set_dump_packets(dump);
+    runtime.set_port(port);
     let session = runtime.handle();
     let clock = Clock::new();
 
@@ -392,7 +404,7 @@ fn main() {
 
     if use_tui {
         let tui_interval = interval_ms.unwrap_or(33);
-        run_tui(session, clock, quantum, tui_interval, &ifaces, node_id);
+        run_tui(session, clock, quantum, tui_interval, &ifaces, node_id, port);
         return;
     }
 

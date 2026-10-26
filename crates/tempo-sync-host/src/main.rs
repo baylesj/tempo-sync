@@ -106,7 +106,15 @@ fn main() {
     let mut node_id = [0u8; 8];
     node_id.copy_from_slice(&label.as_bytes()[..8]);
 
-    let runtime = Runtime::new(NodeId(node_id), vec![default_iface()]);
+    let mut runtime = Runtime::new(NodeId(node_id), vec![default_iface()]);
+    // Tests set this to get a private session that real Link apps never see. Chrome starts the
+    // host with its own environment, so the browser under test passes it on.
+    if let Some(port) = std::env::var("TEMPO_SYNC_PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+    {
+        runtime.set_port(port);
+    }
     let clock = runtime.clock();
     let session = runtime.handle();
     thread::spawn(move || runtime.run());

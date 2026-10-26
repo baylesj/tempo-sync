@@ -10,6 +10,9 @@ use tempo_sync_core::{
     Engine, HostTime, InterfaceId, NodeId, Output, SessionState, SocketAddrPlain,
 };
 
+/// Link's discovery port. Every Link app on a network listens here, which makes them one session.
+pub const LINK_PORT: u16 = 20808;
+
 #[derive(Clone)]
 pub struct Clock {
     epoch: Instant,
@@ -96,6 +99,7 @@ pub struct Runtime {
     rx: std::sync::mpsc::Receiver<RuntimeCmd>,
     tx: std::sync::mpsc::Sender<RuntimeCmd>,
     ifaces: Vec<Ipv4Addr>,
+    port: u16,
 }
 
 impl Runtime {
@@ -114,6 +118,7 @@ impl Runtime {
             rx,
             tx,
             ifaces,
+            port: LINK_PORT,
         }
     }
 
@@ -132,8 +137,24 @@ impl Runtime {
         }
     }
 
+    /// Uses `port` instead of Link's for the multicast group. Peers only find each other on the same
+    /// port, so a test on its own port gets a private session that Link apps never see.
+    pub fn set_port(&mut self, port: u16) {
+        self.port = port;
+    }
+
     pub fn set_dump_packets(&mut self, dump: bool) {
         self.engine.dump_packets = dump;
+    }
+
+    /// Where to send a packet the engine addressed to `to`: the Link group goes to our port.
+    fn destination(&self, to: SocketAddrPlain) -> SocketAddrV4 {
+        let port = if to.ip == [224, 76, 78, 75] {
+            self.port
+        } else {
+            to.port
+        };
+        SocketAddrV4::new(Ipv4Addr::from(to.ip), port)
     }
 
     pub fn run(mut self) {
@@ -148,7 +169,7 @@ impl Runtime {
         multi_sock.set_reuse_address(true).unwrap();
         multi_sock.set_reuse_port(true).unwrap();
 
-        let addr: SocketAddr = "0.0.0.0:20808".parse().unwrap();
+        let addr = SocketAddr::from((Ipv4Addr::UNSPECIFIED, self.port));
         multi_sock.bind(&addr.into()).unwrap();
         multi_sock.set_nonblocking(true).unwrap();
 
@@ -193,7 +214,7 @@ impl Runtime {
                         to,
                         bytes,
                     } => {
-                        let to_addr = SocketAddrV4::new(Ipv4Addr::from(to.ip), to.port);
+                        let to_addr = self.destination(to);
                         if to.ip == [224, 76, 78, 75] {
                             // Send multicast through the specific interface's socket
                             let ip = self.ifaces[iface_id.0 as usize];
@@ -279,7 +300,7 @@ impl Runtime {
                         bytes,
                     } = out
                     {
-                        let to_addr = SocketAddrV4::new(Ipv4Addr::from(to.ip), to.port);
+                        let to_addr = self.destination(to);
                         if to.ip == [224, 76, 78, 75] {
                             let ip = self.ifaces[iface_id.0 as usize];
                             let _ = mcast_send_sock2.set_multicast_if_v4(&ip);
