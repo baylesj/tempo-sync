@@ -1,29 +1,54 @@
-From 5cfc007d0242d4a68964aa6c10b2d64cf9b5dfab Mon Sep 17 00:00:00 2001
+From 2a8e2d67eacbcc9ea7bb2d2f8dc302fdce8ce22b Mon Sep 17 00:00:00 2001
 From: Jordan Bayles <jophba@chromium.org>
-Date: Fri, 23 Oct 2026 20:31:31 +0000
-Subject: [PATCH] Prototype Web Tempo Sync API (navigator.tempoSync)
+Date: Mon, 26 Oct 2026 18:07:43 +0000
+Subject: [PATCH] Prototype Web Tempo Sync API (navigator.tempoSync), v0.2
 
-Prototypes the Web Tempo Sync API behind --enable-blink-features=TempoSync
-and --tempo-sync-engine=rust, bridging Blink to the sans-IO tempo_sync_core
-Rust engine over Mojo and cxx.
+Adds navigator.tempoSync behind --enable-blink-features=TempoSync, following
+the draft at https://bayl.es/web-tempo-sync/, with a browser-process engine
+(--tempo-sync-engine=rust, the default, or fake) bridging Blink to the
+sans-IO tempo_sync_core Rust crate, which speaks the Ableton Link protocol.
 
-Bug: 576996348
+Changes since v0.1, for the current draft:
+- hasPeers and peerschange replace numPeers and numpeerschange. Other
+  open sessions in the browser count as participants, so the session host
+  now tells each document how many sessions are open.
+- timelinechange replaces tempochange, and also fires when the bar lines
+  move. Events are queued, not fired inside commitState().
+- Participants share tempo and bar phase; each session numbers beats its
+  own way (a per-session beat offset, rounded to the quantum).
+  requestBeatAtTime() waits for the next bar line when anyone else is in
+  the session and changes only the page's numbering; forceBeatAtTime()
+  moves the shared grid by at most half a quantum.
+- commitState() shares only what a state changed, validates the state's
+  session and committed flag, and applies the change locally at once, so
+  a capture before the engine echoes no longer sees the old timeline.
+- startStopSync is gone; setTempo() and requestSession() throw RangeError
+  for a non-positive bpm or quantum.
+- The session host pairs each session's receiver with its client, so a
+  closed session stops receiving updates.
+- --tempo-sync-port=<n> runs the session on another port than Link's
+  20808: a private session for tests, invisible to real Link apps.
+- tempo_sync_core is refreshed from the crate (session close/BYEBYE,
+  interop fixes).
+
+Not yet: [Serializable] snapshots in Workers and AudioWorklets, a
+permission prompt, and rate-limiting shared changes.
 ---
  content/browser/BUILD.gn                      |  19 +
  content/browser/browser_interface_binders.cc  |   4 +
- content/browser/tempo_sync/README.md          |  38 ++
+ content/browser/tempo_sync/README.md          |  40 ++
  .../tempo_sync/fake_tempo_sync_engine.cc      |  57 ++
  .../tempo_sync/fake_tempo_sync_engine.h       |  33 +
- .../tempo_sync/rust_tempo_sync_bridge.rs      | 215 +++++++
- .../tempo_sync/rust_tempo_sync_engine.cc      | 450 ++++++++++++++
+ .../tempo_sync/rust_tempo_sync_bridge.rs      | 215 ++++++
+ .../tempo_sync/rust_tempo_sync_engine.cc      | 475 +++++++++++++
  .../tempo_sync/rust_tempo_sync_engine.h       |  49 ++
- .../browser/tempo_sync/tempo_session_host.cc  |  87 +++
- .../browser/tempo_sync/tempo_session_host.h   |  47 ++
+ .../browser/tempo_sync/tempo_session_host.cc  | 118 ++++
+ .../browser/tempo_sync/tempo_session_host.h   |  63 ++
  .../browser/tempo_sync/tempo_sync_engine.h    |  32 +
- .../tempo_sync/tempo_sync_service_impl.cc     |  41 ++
+ .../tempo_sync/tempo_sync_service_impl.cc     |  43 ++
  .../tempo_sync/tempo_sync_service_impl.h      |  29 +
  third_party/blink/public/mojom/BUILD.gn       |   1 +
- .../public/mojom/tempo_sync/tempo_sync.mojom  |  37 ++
+ .../public/mojom/tempo_sync/tempo_sync.mojom  |  41 ++
  .../bindings/generated_in_modules.gni         |   8 +
  .../renderer/bindings/idl_in_modules.gni      |   5 +
  .../core/events/event_target_names.json5      |   1 +
@@ -32,36 +57,36 @@ Bug: 576996348
  .../renderer/modules/tempo_sync/BUILD.gn      |  17 +
  .../blink/renderer/modules/tempo_sync/DEPS    |   3 +
  .../tempo_sync/navigator_tempo_sync.cc        |  39 ++
- .../modules/tempo_sync/navigator_tempo_sync.h |  34 ++
- .../tempo_sync/navigator_tempo_sync.idl       |   1 +
- .../modules/tempo_sync/tempo_session.cc       | 144 +++++
- .../modules/tempo_sync/tempo_session.h        |  70 +++
- .../modules/tempo_sync/tempo_session.idl      |   7 +
- .../tempo_sync/tempo_session_options.idl      |   1 +
- .../modules/tempo_sync/tempo_session_state.cc | 140 +++++
- .../modules/tempo_sync/tempo_session_state.h  |  62 ++
- .../tempo_sync/tempo_session_state.idl        |   6 +
- .../renderer/modules/tempo_sync/tempo_sync.cc |  89 +++
- .../renderer/modules/tempo_sync/tempo_sync.h  |  51 ++
- .../modules/tempo_sync/tempo_sync.idl         |   1 +
+ .../modules/tempo_sync/navigator_tempo_sync.h |  34 +
+ .../tempo_sync/navigator_tempo_sync.idl       |   6 +
+ .../modules/tempo_sync/tempo_session.cc       | 248 +++++++
+ .../modules/tempo_sync/tempo_session.h        |  92 +++
+ .../modules/tempo_sync/tempo_session.idl      |  13 +
+ .../tempo_sync/tempo_session_options.idl      |   5 +
+ .../modules/tempo_sync/tempo_session_state.cc | 173 +++++
+ .../modules/tempo_sync/tempo_session_state.h  |  90 +++
+ .../tempo_sync/tempo_session_state.idl        |  18 +
+ .../renderer/modules/tempo_sync/tempo_sync.cc |  93 +++
+ .../renderer/modules/tempo_sync/tempo_sync.h  |  52 ++
+ .../modules/tempo_sync/tempo_sync.idl         |   6 +
  .../modules/webaudio/audio_context.cc         |   6 +
  .../renderer/modules/webaudio/audio_context.h |   1 +
  .../platform/runtime_enabled_features.json5   |   4 +
  .../tempo_sync/tempo-session-manual.html      |  58 ++
  .../tempo-session-peers-manual.html           |  32 +
- .../tempo_sync/tempo-session.html             |  22 +
+ .../tempo_sync/tempo-session.html             | 117 ++++
  third_party/tempo_sync_core/BUILD.gn          |  19 +
  third_party/tempo_sync_core/Cargo.toml        |   6 +
  third_party/tempo_sync_core/README.chromium   |  10 +
  third_party/tempo_sync_core/src/discovery.rs  |   2 +
- third_party/tempo_sync_core/src/engine.rs     | 562 ++++++++++++++++++
+ third_party/tempo_sync_core/src/engine.rs     | 653 ++++++++++++++++++
  third_party/tempo_sync_core/src/lib.rs        |  15 +
  .../tempo_sync_core/src/measurement.rs        |   3 +
  third_party/tempo_sync_core/src/session.rs    |   3 +
  third_party/tempo_sync_core/src/time.rs       |  49 ++
- third_party/tempo_sync_core/src/timeline.rs   | 175 ++++++
- third_party/tempo_sync_core/src/wire.rs       | 307 ++++++++++
- 52 files changed, 3096 insertions(+)
+ third_party/tempo_sync_core/src/timeline.rs   | 179 +++++
+ third_party/tempo_sync_core/src/wire.rs       | 400 +++++++++++
+ 52 files changed, 3683 insertions(+)
  create mode 100644 content/browser/tempo_sync/README.md
  create mode 100644 content/browser/tempo_sync/fake_tempo_sync_engine.cc
  create mode 100644 content/browser/tempo_sync/fake_tempo_sync_engine.h
@@ -105,10 +130,10 @@ Bug: 576996348
  create mode 100644 third_party/tempo_sync_core/src/wire.rs
 
 diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
-index 1476b3d456d16..c641eb61196ae 100644
+index 637d34d..551ef5c 100644
 --- a/content/browser/BUILD.gn
 +++ b/content/browser/BUILD.gn
-@@ -132,6 +132,7 @@ source_set("browser") {
+@@ -142,6 +142,7 @@ source_set("browser") {
    ldflags = []
  
    deps = [
@@ -116,7 +141,7 @@ index 1476b3d456d16..c641eb61196ae 100644
      ":child_process_security_policy_impl",
      "//base",
      "//base:base_static",
-@@ -329,6 +330,7 @@ source_set("browser") {
+@@ -340,6 +341,7 @@ source_set("browser") {
      "//third_party/blink/public/common",
      "//third_party/blink/public/common:font_enumeration_table_proto",
      "//third_party/blink/public/common:preloading_headers",
@@ -124,7 +149,7 @@ index 1476b3d456d16..c641eb61196ae 100644
      "//third_party/blink/public/mojom/webnn",
      "//third_party/blink/public/strings",
      "//third_party/boringssl",
-@@ -1299,6 +1301,15 @@ source_set("browser") {
+@@ -1307,6 +1309,15 @@ source_set("browser") {
      "media/session/media_session_uma_helper.h",
      "media/system_media_controls/system_media_controls_notifier.cc",
      "media/system_media_controls/system_media_controls_notifier.h",
@@ -140,7 +165,7 @@ index 1476b3d456d16..c641eb61196ae 100644
      "media/webaudio/audio_context_manager_impl.cc",
      "media/webaudio/audio_context_manager_impl.h",
      "media_session/media_session_service.cc",
-@@ -3732,3 +3743,11 @@ fuzzer_test("content_sms_parser_fuzzer") {
+@@ -3739,3 +3750,11 @@ fuzzer_test("content_sms_parser_fuzzer") {
      "//content/public/renderer:renderer_sources",
    ]
  }
@@ -153,7 +178,7 @@ index 1476b3d456d16..c641eb61196ae 100644
 +  deps = [ "//third_party/tempo_sync_core" ]
 +}
 diff --git a/content/browser/browser_interface_binders.cc b/content/browser/browser_interface_binders.cc
-index ca98f584a194c..c167f9937e0a9 100644
+index ce85357..429194a 100644
 --- a/content/browser/browser_interface_binders.cc
 +++ b/content/browser/browser_interface_binders.cc
 @@ -25,6 +25,7 @@
@@ -164,7 +189,7 @@ index ca98f584a194c..c167f9937e0a9 100644
  #include "content/browser/browser_context_impl.h"
  #include "content/browser/browser_main_loop.h"
  #include "content/browser/connection_allowlist_utils.h"
-@@ -1160,6 +1161,9 @@ void PopulateBinderMapWithContext(
+@@ -1222,6 +1223,9 @@ void PopulateBinderMapWithContext(
          &BindWebNNWeightsFileCreatorForRenderFrame);
    }
  
@@ -176,10 +201,10 @@ index ca98f584a194c..c167f9937e0a9 100644
  
 diff --git a/content/browser/tempo_sync/README.md b/content/browser/tempo_sync/README.md
 new file mode 100644
-index 0000000000000..18db41c9f7e0f
+index 0000000..598f5f9
 --- /dev/null
 +++ b/content/browser/tempo_sync/README.md
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,40 @@
 +# Web Tempo Sync Prototype
 +
 +This directory contains the browser-side implementation of the Web Tempo Sync prototype, enabling synchronization of web audio timing with external peers using Ableton Link.
@@ -200,6 +225,7 @@ index 0000000000000..18db41c9f7e0f
 +
 +*   `--enable-blink-features=TempoSync`: Enables the `navigator.tempoSync` WebIDL APIs in Blink.
 +*   `--tempo-sync-engine=rust` or `--tempo-sync-engine=fake`: Selects the engine implementation used by `TempoSessionHost`. (Defaults to `rust`).
++*   `--tempo-sync-port=<n>`: Joins the session on port `n` instead of Link's 20808: a private session that real Link apps (Ableton Live, a phone) never see, for tests. `tempohut --port <n>` and the extension's `TEMPO_SYNC_PORT` do the same.
 +*   `--vmodule=rust_tempo_sync_engine=1`: Enables `VLOG(1)` tracing in the Rust engine, which logs interface joins, UDP datagram payloads, timer deadlines, and session state changes.
 +
 +## Refreshing the Vendored Crate
@@ -215,12 +241,13 @@ index 0000000000000..18db41c9f7e0f
 +This implementation is a prototype and intentionally cuts some corners for simplicity:
 +
 +*   **Multicast Routing**: A single multicast socket is bound to `0.0.0.0`, and joined on each interface.
++*   **Not yet from the current draft**: `TempoSessionState` isn't `[Serializable]` or exposed to Workers and AudioWorklets, and shared changes aren't rate-limited.
 +*   **No Permission Prompt**: The API is exposed without requiring explicit user permission or a permissions-policy check.
 +*   **Browser-Process Sockets**: The UDP sockets are opened directly in the browser process using `net::UDPSocket`. In a production implementation, this should be routed through the Network Service.
 +*   **IPv4 Only**: Only IPv4 multicast (`224.76.78.75`) and IPv4 network interfaces are currently supported.
 diff --git a/content/browser/tempo_sync/fake_tempo_sync_engine.cc b/content/browser/tempo_sync/fake_tempo_sync_engine.cc
 new file mode 100644
-index 0000000000000..892bac9d13cff
+index 0000000..892bac9
 --- /dev/null
 +++ b/content/browser/tempo_sync/fake_tempo_sync_engine.cc
 @@ -0,0 +1,57 @@
@@ -283,7 +310,7 @@ index 0000000000000..892bac9d13cff
 +}  // namespace content
 diff --git a/content/browser/tempo_sync/fake_tempo_sync_engine.h b/content/browser/tempo_sync/fake_tempo_sync_engine.h
 new file mode 100644
-index 0000000000000..c565353c3fb44
+index 0000000..c565353
 --- /dev/null
 +++ b/content/browser/tempo_sync/fake_tempo_sync_engine.h
 @@ -0,0 +1,33 @@
@@ -323,7 +350,7 @@ index 0000000000000..c565353c3fb44
 \ No newline at end of file
 diff --git a/content/browser/tempo_sync/rust_tempo_sync_bridge.rs b/content/browser/tempo_sync/rust_tempo_sync_bridge.rs
 new file mode 100644
-index 0000000000000..438790e1c887d
+index 0000000..438790e
 --- /dev/null
 +++ b/content/browser/tempo_sync/rust_tempo_sync_bridge.rs
 @@ -0,0 +1,215 @@
@@ -544,10 +571,10 @@ index 0000000000000..438790e1c887d
 +}
 diff --git a/content/browser/tempo_sync/rust_tempo_sync_engine.cc b/content/browser/tempo_sync/rust_tempo_sync_engine.cc
 new file mode 100644
-index 0000000000000..a246e42873e3b
+index 0000000..4606392
 --- /dev/null
 +++ b/content/browser/tempo_sync/rust_tempo_sync_engine.cc
-@@ -0,0 +1,450 @@
+@@ -0,0 +1,475 @@
 +
 +#pragma allow_unsafe_buffers
 +#include "content/browser/tempo_sync/rust_tempo_sync_engine.h"
@@ -556,7 +583,9 @@ index 0000000000000..a246e42873e3b
 +#include <map>
 +#include <vector>
 +
++#include "base/command_line.h"
 +#include "base/functional/bind.h"
++#include "base/strings/string_number_conversions.h"
 +#include "base/functional/callback_helpers.h"
 +#include "base/task/single_thread_task_runner.h"
 +#include "base/task/thread_pool.h"
@@ -575,6 +604,27 @@ index 0000000000000..a246e42873e3b
 +#include "content/browser/tempo_sync/rust_tempo_sync_bridge.rs.h"
 +
 +namespace content {
++
++namespace {
++
++// Link's discovery port, where every Link app on a network meets. --tempo-sync-port moves this
++// browser to another port: a private session that real Link apps never see, for tests.
++constexpr uint16_t kLinkPort = 20808;
++
++uint16_t SessionPort() {
++  static const uint16_t port = [] {
++    unsigned value = 0;
++    std::string switch_value =
++        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("tempo-sync-port");
++    if (base::StringToUint(switch_value, &value) && value > 0 && value <= 65535) {
++      return static_cast<uint16_t>(value);
++    }
++    return kLinkPort;
++  }();
++  return port;
++}
++
++}  // namespace
 +
 +struct NetworkInfo {
 +  uint32_t interface_index;
@@ -619,7 +669,7 @@ index 0000000000000..a246e42873e3b
 +    rv = multicast_socket_->SetMulticastTimeToLive(5);
 +    if (rv != net::OK) LOG(ERROR) << "SetMulticastTimeToLive failed: " << rv;
 +
-+    rv = multicast_socket_->Bind(net::IPEndPoint(net::IPAddress::IPv4AllZeros(), 20808));
++    rv = multicast_socket_->Bind(net::IPEndPoint(net::IPAddress::IPv4AllZeros(), SessionPort()));
 +    if (rv != net::OK) LOG(ERROR) << "multicast Bind failed: " << rv;
 +
 +    net::IPAddress mc_addr(224, 76, 78, 75);
@@ -747,7 +797,9 @@ index 0000000000000..a246e42873e3b
 +          auto buf = base::MakeRefCounted<net::IOBufferWithSize>(ev.bytes.size());
 +          memcpy(buf->data(), ev.bytes.data(), ev.bytes.size());
 +          net::IPAddress addr(ev.ip[0], ev.ip[1], ev.ip[2], ev.ip[3]);
-+          net::IPEndPoint ep(addr, ev.port);
++          // The core addresses the Link group on Link's port; send it to ours.
++          const bool to_group = addr == net::IPAddress(224, 76, 78, 75);
++          net::IPEndPoint ep(addr, to_group ? SessionPort() : ev.port);
 +          
 +          uint8_t payload_byte = ev.bytes.size() > 8 ? ev.bytes[8] : 0;
 +          VLOG(1) << "Send iface=" << ev.iface_id << " to=" << ep.ToString() 
@@ -1000,7 +1052,7 @@ index 0000000000000..a246e42873e3b
 +}  // namespace content
 diff --git a/content/browser/tempo_sync/rust_tempo_sync_engine.h b/content/browser/tempo_sync/rust_tempo_sync_engine.h
 new file mode 100644
-index 0000000000000..a33fca99b09b2
+index 0000000..a33fca9
 --- /dev/null
 +++ b/content/browser/tempo_sync/rust_tempo_sync_engine.h
 @@ -0,0 +1,49 @@
@@ -1055,14 +1107,14 @@ index 0000000000000..a33fca99b09b2
 +#endif  // CONTENT_BROWSER_TEMPO_SYNC_RUST_TEMPO_SYNC_ENGINE_H_
 diff --git a/content/browser/tempo_sync/tempo_session_host.cc b/content/browser/tempo_sync/tempo_session_host.cc
 new file mode 100644
-index 0000000000000..fce85bc14b117
+index 0000000..2f3d568
 --- /dev/null
 +++ b/content/browser/tempo_sync/tempo_session_host.cc
-@@ -0,0 +1,87 @@
+@@ -0,0 +1,118 @@
 +#include "content/browser/tempo_sync/tempo_session_host.h"
-+#include "base/functional/bind.h"
-+#include "base/memory/ptr_util.h"
++
 +#include "base/command_line.h"
++#include "base/functional/bind.h"
 +#include "content/browser/tempo_sync/fake_tempo_sync_engine.h"
 +#include "content/browser/tempo_sync/rust_tempo_sync_engine.h"
 +
@@ -1081,7 +1133,8 @@ index 0000000000000..fce85bc14b117
 +}
 +
 +TempoSessionHost::TempoSessionHost() {
-+  std::string engine_type = base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("tempo-sync-engine");
++  std::string engine_type =
++      base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII("tempo-sync-engine");
 +  if (engine_type == "fake") {
 +    engine_ = std::make_unique<FakeTempoSyncEngine>();
 +  } else {
@@ -1090,20 +1143,24 @@ index 0000000000000..fce85bc14b117
 +  engine_->AddObserver(this);
 +  receivers_.set_disconnect_handler(base::BindRepeating(
 +      &TempoSessionHost::OnReceiverDisconnected, base::Unretained(this)));
++  clients_.set_disconnect_handler(base::BindRepeating(
++      &TempoSessionHost::OnClientDisconnected, base::Unretained(this)));
 +}
 +
 +TempoSessionHost::~TempoSessionHost() {
 +  engine_->RemoveObserver(this);
 +}
 +
-+void TempoSessionHost::AddClient(mojo::PendingReceiver<blink::mojom::TempoSession> receiver,
-+                                 mojo::PendingRemote<blink::mojom::TempoSessionClient> client) {
-+  const bool was_empty = receivers_.empty();
-+  receivers_.Add(this, std::move(receiver));
-+  clients_.Add(std::move(client));
++void TempoSessionHost::AddClient(
++    mojo::PendingReceiver<blink::mojom::TempoSession> receiver,
++    mojo::PendingRemote<blink::mojom::TempoSessionClient> client) {
++  const bool was_empty = clients_.empty();
++  mojo::RemoteSetElementId client_id = clients_.Add(std::move(client));
++  receiver_for_client_[client_id] = receivers_.Add(this, std::move(receiver), client_id);
 +  if (was_empty) {
 +    engine_->SetEnabled(true);
 +  }
++  SessionsChanged();
 +}
 +
 +void TempoSessionHost::CommitTimeline(blink::mojom::TimelinePtr timeline) {
@@ -1115,14 +1172,40 @@ index 0000000000000..fce85bc14b117
 +}
 +
 +void TempoSessionHost::Close() {
-+  receivers_.Remove(receivers_.current_receiver());
-+  if (receivers_.empty()) {
-+    engine_->SetEnabled(false);
-+  }
++  RemoveSession(receivers_.current_receiver());
 +}
 +
 +void TempoSessionHost::OnReceiverDisconnected() {
-+  if (receivers_.empty()) {
++  // The receiver is already gone from |receivers_|; current_context() is still its client.
++  const mojo::RemoteSetElementId client_id = receivers_.current_context();
++  receiver_for_client_.erase(client_id);
++  clients_.Remove(client_id);
++  SessionsChanged();
++}
++
++void TempoSessionHost::OnClientDisconnected(mojo::RemoteSetElementId client_id) {
++  auto it = receiver_for_client_.find(client_id);
++  if (it != receiver_for_client_.end()) {
++    receivers_.Remove(it->second);
++    receiver_for_client_.erase(it);
++  }
++  SessionsChanged();
++}
++
++void TempoSessionHost::RemoveSession(mojo::ReceiverId receiver_id) {
++  const mojo::RemoteSetElementId client_id = receivers_.current_context();
++  receivers_.Remove(receiver_id);
++  receiver_for_client_.erase(client_id);
++  clients_.Remove(client_id);
++  SessionsChanged();
++}
++
++void TempoSessionHost::SessionsChanged() {
++  const uint32_t count = GetSessionCount();
++  for (auto& client : clients_) {
++    client->OnSessionCountChanged(count);
++  }
++  if (count == 0) {
 +    engine_->SetEnabled(false);
 +  }
 +}
@@ -1148,40 +1231,48 @@ index 0000000000000..fce85bc14b117
 +}  // namespace content
 diff --git a/content/browser/tempo_sync/tempo_session_host.h b/content/browser/tempo_sync/tempo_session_host.h
 new file mode 100644
-index 0000000000000..db22360009576
+index 0000000..8d74d3a
 --- /dev/null
 +++ b/content/browser/tempo_sync/tempo_session_host.h
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,63 @@
 +#ifndef CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SESSION_HOST_H_
 +#define CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SESSION_HOST_H_
 +
 +#include <memory>
-+#include "base/memory/singleton.h"
++
++#include "base/containers/flat_map.h"
 +#include "base/supports_user_data.h"
 +#include "content/browser/tempo_sync/tempo_sync_engine.h"
 +#include "content/public/browser/browser_context.h"
-+#include "mojo/public/cpp/bindings/remote_set.h"
 +#include "mojo/public/cpp/bindings/receiver_set.h"
++#include "mojo/public/cpp/bindings/remote_set.h"
 +#include "third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom.h"
 +
 +namespace content {
 +
-+class TempoSessionHost : public blink::mojom::TempoSession, public TempoSyncEngine::Observer, public base::SupportsUserData::Data {
++// The browser's one participant in the tempo session, per browser context (profile). Every
++// document's TempoSession talks to it; the engine joins the network while any session is open.
++class TempoSessionHost : public blink::mojom::TempoSession,
++                         public TempoSyncEngine::Observer,
++                         public base::SupportsUserData::Data {
 + public:
 +  static TempoSessionHost* GetForBrowserContext(BrowserContext* context);
 +
 +  TempoSessionHost();
 +  ~TempoSessionHost() override;
 +
-+  void AddClient(mojo::PendingReceiver<blink::mojom::TempoSession> receiver, mojo::PendingRemote<blink::mojom::TempoSessionClient> client);
++  void AddClient(mojo::PendingReceiver<blink::mojom::TempoSession> receiver,
++                 mojo::PendingRemote<blink::mojom::TempoSessionClient> client);
 +
-+  void CommitTimeline(blink::mojom::TimelinePtr timeline) override;
-+  void CommitStartStop(blink::mojom::StartStopStatePtr state) override;
 +  blink::mojom::TimelinePtr GetTimeline() const { return engine_->GetTimeline(); }
 +  blink::mojom::StartStopStatePtr GetStartStop() const { return engine_->GetStartStop(); }
 +  uint32_t GetNumPeers() const { return engine_->GetNumPeers(); }
-+  void Close() override;
++  uint32_t GetSessionCount() const { return static_cast<uint32_t>(clients_.size()); }
 +
++  // blink::mojom::TempoSession
++  void CommitTimeline(blink::mojom::TimelinePtr timeline) override;
++  void CommitStartStop(blink::mojom::StartStopStatePtr state) override;
++  void Close() override;
 +
 +  // TempoSyncEngine::Observer
 +  void OnTimelineChanged(blink::mojom::TimelinePtr timeline) override;
@@ -1189,20 +1280,27 @@ index 0000000000000..db22360009576
 +  void OnNumPeersChanged(uint32_t num_peers) override;
 +
 + private:
++  // A session ends by Close() or by its document going away (either pipe); both remove the
++  // receiver and its client together, then the count goes out and the engine may stop.
++  void RemoveSession(mojo::ReceiverId receiver_id);
 +  void OnReceiverDisconnected();
++  void OnClientDisconnected(mojo::RemoteSetElementId client_id);
++  void SessionsChanged();
 +
 +  std::unique_ptr<TempoSyncEngine> engine_;
 +  mojo::RemoteSet<blink::mojom::TempoSessionClient> clients_;
-+  mojo::ReceiverSet<blink::mojom::TempoSession> receivers_;
++  // Each receiver's context is its client's id in |clients_|, and each client's receiver is
++  // recorded here, so whichever pipe closes first, both go.
++  mojo::ReceiverSet<blink::mojom::TempoSession, mojo::RemoteSetElementId> receivers_;
++  base::flat_map<mojo::RemoteSetElementId, mojo::ReceiverId> receiver_for_client_;
 +};
 +
 +}  // namespace content
 +
 +#endif  // CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SESSION_HOST_H_
-\ No newline at end of file
 diff --git a/content/browser/tempo_sync/tempo_sync_engine.h b/content/browser/tempo_sync/tempo_sync_engine.h
 new file mode 100644
-index 0000000000000..63713d44e01df
+index 0000000..63713d4
 --- /dev/null
 +++ b/content/browser/tempo_sync/tempo_sync_engine.h
 @@ -0,0 +1,32 @@
@@ -1241,10 +1339,10 @@ index 0000000000000..63713d44e01df
 \ No newline at end of file
 diff --git a/content/browser/tempo_sync/tempo_sync_service_impl.cc b/content/browser/tempo_sync/tempo_sync_service_impl.cc
 new file mode 100644
-index 0000000000000..1a716d62c8c0a
+index 0000000..7584ec5
 --- /dev/null
 +++ b/content/browser/tempo_sync/tempo_sync_service_impl.cc
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,43 @@
 +#include "content/browser/tempo_sync/tempo_sync_service_impl.h"
 +
 +#include "content/browser/tempo_sync/tempo_session_host.h"
@@ -1282,13 +1380,15 @@ index 0000000000000..1a716d62c8c0a
 +
 +  host->AddClient(std::move(session_receiver), std::move(client));
 +
-+  std::move(callback).Run(std::move(session_remote), host->GetTimeline(), host->GetStartStop(), host->GetNumPeers(), std::nullopt);
++  std::move(callback).Run(std::move(session_remote), host->GetTimeline(),
++                          host->GetStartStop(), host->GetNumPeers(),
++                          host->GetSessionCount(), std::nullopt);
 +}
 +
 +}  // namespace content
 diff --git a/content/browser/tempo_sync/tempo_sync_service_impl.h b/content/browser/tempo_sync/tempo_sync_service_impl.h
 new file mode 100644
-index 0000000000000..0284b811139b0
+index 0000000..0284b81
 --- /dev/null
 +++ b/content/browser/tempo_sync/tempo_sync_service_impl.h
 @@ -0,0 +1,29 @@
@@ -1323,7 +1423,7 @@ index 0000000000000..0284b811139b0
 +#endif  // CONTENT_BROWSER_TEMPO_SYNC_TEMPO_SYNC_SERVICE_IMPL_H_
 \ No newline at end of file
 diff --git a/third_party/blink/public/mojom/BUILD.gn b/third_party/blink/public/mojom/BUILD.gn
-index f43e0699bcb3d..e766fa3c117a5 100644
+index 043558b..48bd8a1 100644
 --- a/third_party/blink/public/mojom/BUILD.gn
 +++ b/third_party/blink/public/mojom/BUILD.gn
 @@ -279,6 +279,7 @@ mojom("mojom_platform") {
@@ -1336,10 +1436,10 @@ index f43e0699bcb3d..e766fa3c117a5 100644
      "webid/fedcm_identity_request.mojom",
 diff --git a/third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom b/third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom
 new file mode 100644
-index 0000000000000..a85c6c3d4bcbb
+index 0000000..2d25b91
 --- /dev/null
 +++ b/third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom
-@@ -0,0 +1,37 @@
+@@ -0,0 +1,41 @@
 +module blink.mojom;
 +
 +import "mojo/public/mojom/base/time.mojom";
@@ -1358,12 +1458,12 @@ index 0000000000000..a85c6c3d4bcbb
 +
 +struct TempoSessionOptions {
 +  double quantum;
-+  bool start_stop_sync;
 +};
 +
 +interface TempoSyncService {
 +  RequestSession(TempoSessionOptions options, pending_remote<TempoSessionClient> client)
-+      => (pending_remote<TempoSession>? session, Timeline? timeline, StartStopState? start_stop, uint32 num_peers, string? error_message);
++      => (pending_remote<TempoSession>? session, Timeline? timeline, StartStopState? start_stop,
++          uint32 num_peers, uint32 session_count, string? error_message);
 +};
 +
 +interface TempoSession {
@@ -1375,13 +1475,17 @@ index 0000000000000..a85c6c3d4bcbb
 +interface TempoSessionClient {
 +  OnTimelineChanged(Timeline timeline);
 +  OnStartStopChanged(StartStopState state);
++  // Other participants on the network.
 +  OnNumPeersChanged(uint32 num_peers);
++  // Open sessions in this browser (this profile), the receiving one included. Other documents'
++  // sessions are participants too, for hasPeers and for whether requestBeatAtTime() waits.
++  OnSessionCountChanged(uint32 session_count);
 +};
 diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
-index 58759953af29a..0566c9660d326 100644
+index b56e9a9..cc85eb1 100644
 --- a/third_party/blink/renderer/bindings/generated_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
-@@ -128,6 +128,8 @@ generated_dictionary_sources_in_modules = [
+@@ -122,6 +122,8 @@ generated_dictionary_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_address_init.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_all_accepted_credentials_options.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_all_accepted_credentials_options.h",
@@ -1390,7 +1494,7 @@ index 58759953af29a..0566c9660d326 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_analyser_options.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_analyser_options.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_android_pay_method_data.cc",
-@@ -2091,6 +2093,12 @@ generated_interface_sources_in_modules = [
+@@ -2067,6 +2069,12 @@ generated_interface_sources_in_modules = [
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_ads.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_ambient_light_sensor.cc",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_ambient_light_sensor.h",
@@ -1404,10 +1508,10 @@ index 58759953af29a..0566c9660d326 100644
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_analyser_node.h",
    "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_angle_instanced_arrays.cc",
 diff --git a/third_party/blink/renderer/bindings/idl_in_modules.gni b/third_party/blink/renderer/bindings/idl_in_modules.gni
-index 07a93dbbfedf7..fac08d94b051f 100644
+index 68b809c..372ee2e 100644
 --- a/third_party/blink/renderer/bindings/idl_in_modules.gni
 +++ b/third_party/blink/renderer/bindings/idl_in_modules.gni
-@@ -836,6 +836,11 @@ static_idl_files_in_modules = [
+@@ -816,6 +816,11 @@ static_idl_files_in_modules = [
    "//third_party/blink/renderer/modules/web_install/install_params.idl",
    "//third_party/blink/renderer/modules/web_install/navigator_web_install.idl",
    "//third_party/blink/renderer/modules/web_install/web_install_result.idl",
@@ -1420,7 +1524,7 @@ index 07a93dbbfedf7..fac08d94b051f 100644
    "//third_party/blink/renderer/modules/webaudio/analyser_options.idl",
    "//third_party/blink/renderer/modules/webaudio/audio_buffer.idl",
 diff --git a/third_party/blink/renderer/core/events/event_target_names.json5 b/third_party/blink/renderer/core/events/event_target_names.json5
-index a0e2048beae6d..eafe6cc4eb8ab 100644
+index a0e2048..eafe6cc 100644
 --- a/third_party/blink/renderer/core/events/event_target_names.json5
 +++ b/third_party/blink/renderer/core/events/event_target_names.json5
 @@ -16,6 +16,7 @@
@@ -1432,24 +1536,34 @@ index a0e2048beae6d..eafe6cc4eb8ab 100644
      "NavigationHistoryEntry",
      "Node",
 diff --git a/third_party/blink/renderer/core/events/event_type_names.json5 b/third_party/blink/renderer/core/events/event_type_names.json5
-index 2fc56b6b772a0..308a2a27561fe 100644
+index 3389661..18ce622 100644
 --- a/third_party/blink/renderer/core/events/event_type_names.json5
 +++ b/third_party/blink/renderer/core/events/event_type_names.json5
-@@ -117,6 +117,9 @@
-     "ended",
-     "enter",
-     "enterpictureinpicture",
-+    "numpeerschange",
+@@ -219,9 +219,11 @@
+     "payerdetailchange",
+     "paymentmethodchange",
+     "paymentrequest",
++    "peerschange",
+     "periodicsync",
+     "play",
+     "playing",
 +    "playingchange",
-+    "tempochange",
-     "error",
-     "exit",
-     "fetch",
+     "pointercancel",
+     "pointerdown",
+     "pointerenter",
+@@ -309,6 +311,7 @@
+     "textInput",
+     "textformatupdate",
+     "textupdate",
++    "timelinechange",
+     "timeout",
+     "timeupdate",
+     "timezonechange",
 diff --git a/third_party/blink/renderer/modules/BUILD.gn b/third_party/blink/renderer/modules/BUILD.gn
-index ab4f7332e8b43..2fcc0f4077d50 100644
+index 9b0b898..3964cb4 100644
 --- a/third_party/blink/renderer/modules/BUILD.gn
 +++ b/third_party/blink/renderer/modules/BUILD.gn
-@@ -161,6 +161,7 @@ component("modules") {
+@@ -160,6 +160,7 @@ component("modules") {
      "//third_party/blink/renderer/modules/webcodecs",
      "//third_party/blink/renderer/modules/webgl",
      "//third_party/blink/renderer/modules/webgpu",
@@ -1459,7 +1573,7 @@ index ab4f7332e8b43..2fcc0f4077d50 100644
      "//third_party/blink/renderer/modules/webshare",
 diff --git a/third_party/blink/renderer/modules/tempo_sync/BUILD.gn b/third_party/blink/renderer/modules/tempo_sync/BUILD.gn
 new file mode 100644
-index 0000000000000..ee9d4d761d30e
+index 0000000..ee9d4d7
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/BUILD.gn
 @@ -0,0 +1,17 @@
@@ -1483,7 +1597,7 @@ index 0000000000000..ee9d4d761d30e
 \ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/DEPS b/third_party/blink/renderer/modules/tempo_sync/DEPS
 new file mode 100644
-index 0000000000000..5b96900531b58
+index 0000000..5b96900
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/DEPS
 @@ -0,0 +1,3 @@
@@ -1493,7 +1607,7 @@ index 0000000000000..5b96900531b58
 \ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.cc b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.cc
 new file mode 100644
-index 0000000000000..b6e039df13117
+index 0000000..b6e039d
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.cc
 @@ -0,0 +1,39 @@
@@ -1539,7 +1653,7 @@ index 0000000000000..b6e039df13117
 \ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.h b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.h
 new file mode 100644
-index 0000000000000..bf8a97e292c75
+index 0000000..bf8a97e
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.h
 @@ -0,0 +1,34 @@
@@ -1580,24 +1694,30 @@ index 0000000000000..bf8a97e292c75
 \ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.idl b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.idl
 new file mode 100644
-index 0000000000000..293344209a1ef
+index 0000000..13156fb
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/navigator_tempo_sync.idl
-@@ -0,0 +1 @@
-+[ImplementedAs=NavigatorTempoSync, SecureContext, RuntimeEnabled=TempoSync] partial interface Navigator { readonly attribute TempoSync tempoSync; };
-\ No newline at end of file
+@@ -0,0 +1,6 @@
++// https://bayl.es/web-tempo-sync/#navigator-extension
++
++[ImplementedAs=NavigatorTempoSync, SecureContext, RuntimeEnabled=TempoSync]
++partial interface Navigator {
++  readonly attribute TempoSync tempoSync;
++};
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session.cc b/third_party/blink/renderer/modules/tempo_sync/tempo_session.cc
 new file mode 100644
-index 0000000000000..4d39d000c837c
+index 0000000..f2000cb
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session.cc
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,248 @@
 +#include "third_party/blink/renderer/modules/tempo_sync/tempo_session.h"
++
++#include <cmath>
 +
 +#include "third_party/blink/renderer/bindings/modules/v8/v8_tempo_session_options.h"
 +#include "third_party/blink/renderer/core/dom/events/event.h"
-+#include "third_party/blink/renderer/core/event_type_names.h"
 +#include "third_party/blink/renderer/core/event_target_names.h"
++#include "third_party/blink/renderer/core/event_type_names.h"
 +#include "third_party/blink/renderer/core/frame/local_dom_window.h"
 +#include "third_party/blink/renderer/core/timing/dom_window_performance.h"
 +#include "third_party/blink/renderer/core/timing/window_performance.h"
@@ -1607,13 +1727,36 @@ index 0000000000000..4d39d000c837c
 +
 +namespace blink {
 +
++namespace {
++
++// Two timelines are the same line if they agree on tempo and on the beat at one time. The
++// engine re-anchors a committed timeline, so comparing fields alone would see changes that
++// aren't there.
++bool SameTimeline(const mojom::blink::Timeline& a,
++                  const mojom::blink::Timeline& b) {
++  if (std::abs(a.tempo_bpm - b.tempo_bpm) > 1e-9) {
++    return false;
++  }
++  double a_beat_at_b_origin =
++      a.beat_origin +
++      (b.time_origin - a.time_origin).InSecondsF() * (a.tempo_bpm / 60.0);
++  return std::abs(a_beat_at_b_origin - b.beat_origin) < 1e-6;
++}
++
++bool SameStartStop(const mojom::blink::StartStopState& a,
++                   const mojom::blink::StartStopState& b) {
++  return a.is_playing == b.is_playing &&
++         (a.time - b.time).magnitude() < base::Microseconds(1);
++}
++
++}  // namespace
++
 +TempoSession::TempoSession(ExecutionContext* context,
 +                           const TempoSessionOptions* options)
 +    : ExecutionContextLifecycleObserver(context),
 +      remote_(context),
-+      receiver_(this, context) {
-+  quantum_ = options->quantum();
-+}
++      receiver_(this, context),
++      quantum_(options->quantum()) {}
 +
 +TempoSession::~TempoSession() = default;
 +
@@ -1625,18 +1768,38 @@ index 0000000000000..4d39d000c837c
 +
 +void TempoSession::BindRemote(
 +    mojo::PendingRemote<mojom::blink::TempoSession> remote) {
-+  remote_.Bind(
-+      std::move(remote),
-+      GetExecutionContext()->GetTaskRunner(TaskType::kMiscPlatformAPI));
++  remote_.Bind(std::move(remote),
++               GetExecutionContext()->GetTaskRunner(TaskType::kMiscPlatformAPI));
++}
++
++void TempoSession::Seed(mojom::blink::TimelinePtr timeline,
++                        mojom::blink::StartStopStatePtr start_stop,
++                        uint32_t num_peers,
++                        uint32_t session_count) {
++  latest_timeline_ = std::move(timeline);
++  latest_start_stop_ = std::move(start_stop);
++  num_peers_ = num_peers;
++  session_count_ = session_count;
++}
++
++bool TempoSession::hasPeers() const {
++  return !closed_ && (num_peers_ > 0 || session_count_ > 1);
 +}
 +
 +TempoSessionState* TempoSession::captureState(ExceptionState& exception_state) {
 +  return captureState(nullptr, exception_state);
 +}
 +
-+TempoSessionState* TempoSession::captureState(BaseAudioContext* context, ExceptionState& exception_state) {
++TempoSessionState* TempoSession::captureState(BaseAudioContext* context,
++                                              ExceptionState& exception_state) {
++  if (closed_) {
++    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
++                                      "The session is closed.");
++    return nullptr;
++  }
 +  if (!latest_timeline_ || !latest_start_stop_) {
-+    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError, "Session unseeded");
++    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
++                                      "The session has no timeline yet.");
 +    return nullptr;
 +  }
 +
@@ -1648,6 +1811,7 @@ index 0000000000000..4d39d000c837c
 +    audio_context = static_cast<AudioContext*>(context);
 +  }
 +  if (audio_context) {
++    // The context time now reaching the output, and the host time it got there.
 +    auto pos = audio_context->GetOutputPositionForTempoSync();
 +    if (pos.second.is_null()) {
 +      local_time_origin = audio_context->currentTime();
@@ -1660,23 +1824,60 @@ index 0000000000000..4d39d000c837c
 +    LocalDOMWindow* window = To<LocalDOMWindow>(GetExecutionContext());
 +    WindowPerformance* performance = DOMWindowPerformance::performance(*window);
 +    host_time_origin = base::TimeTicks::Now();
-+    local_time_origin = performance->MonotonicTimeToDOMHighResTimeStamp(host_time_origin) / 1000.0;
++    local_time_origin =
++        performance->MonotonicTimeToDOMHighResTimeStamp(host_time_origin) / 1000.0;
 +  }
 +
 +  return MakeGarbageCollected<TempoSessionState>(
-+      latest_timeline_->Clone(), latest_start_stop_->Clone(),
-+      host_time_origin, local_time_origin, quantum_);
++      this, latest_timeline_->Clone(), latest_start_stop_->Clone(),
++      host_time_origin, local_time_origin, beat_offset_, quantum_,
++      /*solo=*/!hasPeers());
 +}
 +
-+void TempoSession::commitState(TempoSessionState* state, ExceptionState& exception_state) {
-+  if (!remote_.is_bound()) {
++void TempoSession::commitState(TempoSessionState* state,
++                               ExceptionState& exception_state) {
++  if (closed_) {
++    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
++                                      "The session is closed.");
 +    return;
 +  }
-+  remote_->CommitTimeline(state->CloneTimeline());
-+  remote_->CommitStartStop(state->CloneStartStop());
++  if (state->session() != this) {
++    exception_state.ThrowDOMException(
++        DOMExceptionCode::kInvalidModificationError,
++        "This state was captured from another session.");
++    return;
++  }
++  if (state->committed()) {
++    exception_state.ThrowDOMException(DOMExceptionCode::kInvalidStateError,
++                                      "This state was already committed.");
++    return;
++  }
++  state->MarkCommitted();
++  beat_offset_ = state->beat_offset();
++
++  // Share only what the state changed, so a snapshot taken before another participant's change
++  // doesn't undo it. Apply it here at once too: the engine echoes it, but a capture before then
++  // would otherwise still see the old timeline.
++  // TODO(tempo-sync): rate-limit shared changes (the draft suggests ~20 a second).
++  if (state->timeline_changed()) {
++    if (remote_.is_bound()) {
++      remote_->CommitTimeline(state->CloneTimeline());
++    }
++    ApplyTimeline(state->CloneTimeline());
++  }
++  if (state->playing_changed()) {
++    if (remote_.is_bound()) {
++      remote_->CommitStartStop(state->CloneStartStop());
++    }
++    ApplyStartStop(state->CloneStartStop());
++  }
 +}
 +
 +void TempoSession::close() {
++  if (closed_) {
++    return;
++  }
++  closed_ = true;
 +  if (remote_.is_bound()) {
 +    remote_->Close();
 +    remote_.reset();
@@ -1693,37 +1894,58 @@ index 0000000000000..4d39d000c837c
 +}
 +
 +void TempoSession::OnTimelineChanged(mojom::blink::TimelinePtr timeline) {
-+  bool tempo_changed = false;
-+  if (!latest_timeline_ || latest_timeline_->tempo_bpm != timeline->tempo_bpm) {
-+    tempo_changed = true;
-+  }
-+  latest_timeline_ = std::move(timeline);
-+  
-+  if (tempo_changed) {
-+    DispatchEvent(*Event::Create(event_type_names::kTempochange));
-+  }
++  ApplyTimeline(std::move(timeline));
 +}
 +
 +void TempoSession::OnStartStopChanged(mojom::blink::StartStopStatePtr state) {
-+  bool playing_changed = false;
-+  if (!latest_start_stop_ || latest_start_stop_->is_playing != state->is_playing) {
-+    playing_changed = true;
-+  }
-+  latest_start_stop_ = std::move(state);
-+
-+  if (playing_changed) {
-+    DispatchEvent(*Event::Create(event_type_names::kPlayingchange));
-+  }
++  ApplyStartStop(std::move(state));
 +}
 +
 +void TempoSession::OnNumPeersChanged(uint32_t num_peers) {
-+  if (num_peers_ != num_peers) {
-+    num_peers_ = num_peers;
-+    DispatchEvent(*Event::Create(event_type_names::kNumpeerschange));
++  ApplyPeers(num_peers, session_count_);
++}
++
++void TempoSession::OnSessionCountChanged(uint32_t session_count) {
++  ApplyPeers(num_peers_, session_count);
++}
++
++void TempoSession::ApplyTimeline(mojom::blink::TimelinePtr timeline) {
++  const bool changed =
++      latest_timeline_ && !SameTimeline(*latest_timeline_, *timeline);
++  latest_timeline_ = std::move(timeline);
++  if (changed) {
++    QueueEvent(event_type_names::kTimelinechange);
 +  }
 +}
 +
++void TempoSession::ApplyStartStop(mojom::blink::StartStopStatePtr state) {
++  const bool changed =
++      latest_start_stop_ && !SameStartStop(*latest_start_stop_, *state);
++  latest_start_stop_ = std::move(state);
++  if (changed) {
++    QueueEvent(event_type_names::kPlayingchange);
++  }
++}
++
++void TempoSession::ApplyPeers(uint32_t num_peers, uint32_t session_count) {
++  const bool had_peers = hasPeers();
++  num_peers_ = num_peers;
++  session_count_ = session_count;
++  if (hasPeers() != had_peers) {
++    QueueEvent(event_type_names::kPeerschange);
++  }
++}
++
++void TempoSession::QueueEvent(const AtomicString& type) {
++  // Queued, as the draft says, so a commit's own events arrive after commitState() returns.
++  if (closed_ || !GetExecutionContext()) {
++    return;
++  }
++  EnqueueEvent(*Event::Create(type), TaskType::kMiscPlatformAPI);
++}
++
 +void TempoSession::ContextDestroyed() {
++  closed_ = true;
 +  remote_.reset();
 +  receiver_.reset();
 +}
@@ -1736,13 +1958,12 @@ index 0000000000000..4d39d000c837c
 +}
 +
 +}  // namespace blink
-\ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session.h b/third_party/blink/renderer/modules/tempo_sync/tempo_session.h
 new file mode 100644
-index 0000000000000..0d92a308899cd
+index 0000000..27a9d07
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session.h
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,92 @@
 +#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_H_
 +#define THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_H_
 +
@@ -1760,6 +1981,8 @@ index 0000000000000..0d92a308899cd
 +class TempoSessionOptions;
 +class TempoSessionState;
 +
++// A document's connection to the tempo session
++// (https://bayl.es/web-tempo-sync/#interface-temposession).
 +class TempoSession final : public EventTarget,
 +                           public ExecutionContextLifecycleObserver,
 +                           public mojom::blink::TempoSessionClient {
@@ -1772,17 +1995,24 @@ index 0000000000000..0d92a308899cd
 +  mojo::PendingRemote<mojom::blink::TempoSessionClient> BindNewPipeAndPassRemote();
 +  void BindRemote(mojo::PendingRemote<mojom::blink::TempoSession> remote);
 +
++  // Seeds the session before its promise resolves; fires no events.
++  void Seed(mojom::blink::TimelinePtr timeline,
++            mojom::blink::StartStopStatePtr start_stop,
++            uint32_t num_peers,
++            uint32_t session_count);
++
 +  // WebIDL
-+  uint32_t numPeers() const { return num_peers_; }
++  bool hasPeers() const;
 +  double quantum() const { return quantum_; }
 +
 +  TempoSessionState* captureState(ExceptionState& exception_state);
-+  TempoSessionState* captureState(BaseAudioContext* context, ExceptionState& exception_state);
++  TempoSessionState* captureState(BaseAudioContext* context,
++                                  ExceptionState& exception_state);
 +  void commitState(TempoSessionState* state, ExceptionState& exception_state);
 +  void close();
 +
-+  DEFINE_ATTRIBUTE_EVENT_LISTENER(numpeerschange, kNumpeerschange)
-+  DEFINE_ATTRIBUTE_EVENT_LISTENER(tempochange, kTempochange)
++  DEFINE_ATTRIBUTE_EVENT_LISTENER(peerschange, kPeerschange)
++  DEFINE_ATTRIBUTE_EVENT_LISTENER(timelinechange, kTimelinechange)
 +  DEFINE_ATTRIBUTE_EVENT_LISTENER(playingchange, kPlayingchange)
 +
 +  // EventTarget
@@ -1793,6 +2023,7 @@ index 0000000000000..0d92a308899cd
 +  void OnTimelineChanged(mojom::blink::TimelinePtr timeline) override;
 +  void OnStartStopChanged(mojom::blink::StartStopStatePtr state) override;
 +  void OnNumPeersChanged(uint32_t num_peers) override;
++  void OnSessionCountChanged(uint32_t session_count) override;
 +
 +  // ExecutionContextLifecycleObserver
 +  void ContextDestroyed() override;
@@ -1800,11 +2031,23 @@ index 0000000000000..0d92a308899cd
 +  void Trace(Visitor* visitor) const override;
 +
 + private:
++  // Store new state; queue the event if it differs from what the page had (not when seeding).
++  void ApplyTimeline(mojom::blink::TimelinePtr timeline);
++  void ApplyStartStop(mojom::blink::StartStopStatePtr state);
++  void ApplyPeers(uint32_t num_peers, uint32_t session_count);
++  void QueueEvent(const AtomicString& type);
++
 +  HeapMojoRemote<mojom::blink::TempoSession> remote_;
 +  HeapMojoReceiver<mojom::blink::TempoSessionClient, TempoSession> receiver_;
 +
-+  uint32_t num_peers_ = 0;
 +  double quantum_ = 4.0;
++  // This session's beat numbering, relative to the shared timeline. Never leaves the page.
++  double beat_offset_ = 0.0;
++  bool closed_ = false;
++
++  uint32_t num_peers_ = 0;
++  // Open sessions in this browser, this one included.
++  uint32_t session_count_ = 1;
 +
 +  mojom::blink::TimelinePtr latest_timeline_;
 +  mojom::blink::StartStopStatePtr latest_start_stop_;
@@ -1813,129 +2056,164 @@ index 0000000000000..0d92a308899cd
 +}  // namespace blink
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_H_
-\ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session.idl b/third_party/blink/renderer/modules/tempo_sync/tempo_session.idl
 new file mode 100644
-index 0000000000000..5fdb853466dbd
+index 0000000..aefc059
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session.idl
-@@ -0,0 +1,7 @@
-+[Exposed=Window, SecureContext, RuntimeEnabled=TempoSync] interface TempoSession : EventTarget {
-+  readonly attribute unsigned long numPeers; readonly attribute double quantum;
+@@ -0,0 +1,13 @@
++// https://bayl.es/web-tempo-sync/#interface-temposession
++
++[Exposed=Window, SecureContext, RuntimeEnabled=TempoSync]
++interface TempoSession : EventTarget {
++  readonly attribute boolean hasPeers;
++  readonly attribute double quantum;
 +  [RaisesException] TempoSessionState captureState(optional BaseAudioContext context);
 +  [RaisesException] undefined commitState(TempoSessionState state);
 +  undefined close();
-+  attribute EventHandler onnumpeerschange; attribute EventHandler ontempochange; attribute EventHandler onplayingchange;
++  attribute EventHandler onpeerschange;
++  attribute EventHandler ontimelinechange;
++  attribute EventHandler onplayingchange;
 +};
-\ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session_options.idl b/third_party/blink/renderer/modules/tempo_sync/tempo_session_options.idl
 new file mode 100644
-index 0000000000000..4c56756b306dc
+index 0000000..9af3c4d
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session_options.idl
-@@ -0,0 +1 @@
-+dictionary TempoSessionOptions { double quantum = 4; boolean startStopSync = false; };
-\ No newline at end of file
+@@ -0,0 +1,5 @@
++// https://bayl.es/web-tempo-sync/#interface-temposync
++
++dictionary TempoSessionOptions {
++  double quantum = 4;
++};
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.cc b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.cc
 new file mode 100644
-index 0000000000000..5a3d55e66d4fc
+index 0000000..3a4d051
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.cc
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,173 @@
 +#include "third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h"
 +
 +#include <cmath>
-+#include "third_party/blink/renderer/core/frame/local_dom_window.h"
-+#include "third_party/blink/renderer/core/timing/dom_window_performance.h"
-+#include "third_party/blink/renderer/core/timing/window_performance.h"
++
++#include "third_party/blink/renderer/modules/tempo_sync/tempo_session.h"
 +#include "third_party/blink/renderer/platform/bindings/exception_state.h"
 +
 +namespace blink {
 +
-+TempoSessionState::TempoSessionState(mojom::blink::TimelinePtr timeline,
++namespace {
++
++// Position within the unit of |quantum| beats, in [0, quantum).
++double Phase(double beat, double quantum) {
++  double phase = std::fmod(beat, quantum);
++  return phase < 0 ? phase + quantum : phase;
++}
++
++}  // namespace
++
++TempoSessionState::TempoSessionState(TempoSession* session,
++                                     mojom::blink::TimelinePtr timeline,
 +                                     mojom::blink::StartStopStatePtr start_stop,
 +                                     base::TimeTicks host_time_origin,
-+                                     double local_time_origin, double session_quantum)
-+    : timeline_(std::move(timeline)),
++                                     double local_time_origin,
++                                     double beat_offset,
++                                     double default_quantum,
++                                     bool solo)
++    : session_(session),
++      timeline_(std::move(timeline)),
 +      start_stop_(std::move(start_stop)),
 +      host_time_origin_(host_time_origin),
 +      local_time_origin_(local_time_origin),
-+      session_quantum_(session_quantum) {}
++      beat_offset_(beat_offset),
++      default_quantum_(default_quantum),
++      solo_(solo) {}
 +
 +double TempoSessionState::tempo() const {
 +  return timeline_->tempo_bpm;
 +}
 +
-+void TempoSessionState::setTempo(double bpm, double atTime) {
-+  // To change tempo at atTime, we shift the time_origin and beat_origin
-+  // to be exactly at atTime, then update the tempo.
-+  base::TimeTicks host_time = LocalToHostTime(atTime);
-+  double current_beat = BeatAtHostTime(host_time);
-+
++void TempoSessionState::setTempo(double bpm,
++                                 double at_time,
++                                 ExceptionState& exception_state) {
++  if (bpm <= 0) {
++    exception_state.ThrowRangeError("bpm must be positive");
++    return;
++  }
++  // Keep the beat at |at_time|: the new tempo starts from there.
++  base::TimeTicks host_time = LocalToHostTime(at_time);
++  double beat = SharedBeatAt(host_time);
 +  timeline_->tempo_bpm = bpm;
 +  timeline_->time_origin = host_time;
-+  timeline_->beat_origin = current_beat;
-+}
-+
-+double TempoSessionState::beatAtTime(double time, double quantum) {
-+  // quantum is unused for just calculating the beat, but it's part of the API.
-+  return beatAtTime(time);
++  timeline_->beat_origin = beat;
++  timeline_changed_ = true;
 +}
 +
 +double TempoSessionState::beatAtTime(double time) {
-+  return BeatAtHostTime(LocalToHostTime(time));
++  return beatAtTime(time, default_quantum_);
 +}
 +
-+double TempoSessionState::phaseAtTime(double time, double quantum) {
-+  double beat = beatAtTime(time);
-+  if (quantum <= 0) return 0;
-+  double phase = fmod(beat, quantum);
-+  if (phase < 0) phase += quantum;
-+  return phase;
++double TempoSessionState::beatAtTime(double time, double quantum) {
++  return SharedBeatAt(LocalToHostTime(time)) +
++         OffsetFor(EffectiveQuantum(quantum));
 +}
 +
 +double TempoSessionState::phaseAtTime(double time) {
-+  return phaseAtTime(time, session_quantum_); // We will route the default quantum from TempoSession
++  return phaseAtTime(time, default_quantum_);
 +}
 +
-+double TempoSessionState::timeAtBeat(double beat, double quantum) {
-+  return timeAtBeat(beat);
++double TempoSessionState::phaseAtTime(double time, double quantum) {
++  // The shared phase: the same for every participant using this quantum.
++  return Phase(SharedBeatAt(LocalToHostTime(time)), EffectiveQuantum(quantum));
 +}
 +
 +double TempoSessionState::timeAtBeat(double beat) {
-+  return HostToLocalTime(HostTimeAtBeat(beat));
++  return timeAtBeat(beat, default_quantum_);
 +}
 +
-+void TempoSessionState::requestBeatAtTime(double beat, double time, double quantum) {
-+  // Preserve phase relative to the quantum by shifting the timeline so that
-+  // the requested beat lands at the requested time rounded to the nearest phase-equivalent beat.
-+  base::TimeTicks host_time = LocalToHostTime(time);
-+  double current_beat_at_time = BeatAtHostTime(host_time);
-+  
-+  if (quantum > 0) {
-+    double beat_diff = beat - current_beat_at_time;
-+    double quantum_shifts = round(beat_diff / quantum);
-+    double target_beat = current_beat_at_time + quantum_shifts * quantum;
-+    
-+    // Now we want target_beat to happen at host_time.
-+    timeline_->beat_origin = target_beat;
-+    timeline_->time_origin = host_time;
-+  } else {
-+    forceBeatAtTime(beat, time);
-+  }
++double TempoSessionState::timeAtBeat(double beat, double quantum) {
++  return HostToLocalTime(
++      HostTimeAtSharedBeat(beat - OffsetFor(EffectiveQuantum(quantum))));
 +}
 +
 +void TempoSessionState::requestBeatAtTime(double beat, double time) {
-+  requestBeatAtTime(beat, time, session_quantum_);
++  requestBeatAtTime(beat, time, default_quantum_);
 +}
 +
-+void TempoSessionState::forceBeatAtTime(double beat, double time, double quantum) {
-+  forceBeatAtTime(beat, time);
++void TempoSessionState::requestBeatAtTime(double beat,
++                                          double time,
++                                          double quantum) {
++  const double q = EffectiveQuantum(quantum);
++  if (solo_) {
++    forceBeatAtTime(beat, time, q);
++    return;
++  }
++  // With others present: wait for the next point at or after |time| where the session's phase
++  // matches |beat|'s, and number it |beat|. Only this session's numbering changes.
++  const double current = beatAtTime(time, q);
++  const double launch = current + Phase(Phase(beat, q) - Phase(current, q), q);
++  const double shared_launch = launch - OffsetFor(q);
++  beat_offset_ = beat - shared_launch;
 +}
 +
 +void TempoSessionState::forceBeatAtTime(double beat, double time) {
-+  timeline_->beat_origin = beat;
-+  timeline_->time_origin = LocalToHostTime(time);
++  forceBeatAtTime(beat, time, default_quantum_);
++}
++
++void TempoSessionState::forceBeatAtTime(double beat,
++                                        double time,
++                                        double quantum) {
++  // Moves everyone's bar lines, by at most half a quantum, so |beat| falls at |time|.
++  const double q = EffectiveQuantum(quantum);
++  const base::TimeTicks host_time = LocalToHostTime(time);
++  const double current = SharedBeatAt(host_time);
++  double shift = Phase(Phase(beat, q) - Phase(current, q), q);
++  if (shift > q / 2) {
++    shift -= q;
++  }
++  timeline_->time_origin = host_time;
++  timeline_->beat_origin = current + shift;
++  beat_offset_ = beat - (current + shift);
++  timeline_changed_ = true;
 +}
 +
 +bool TempoSessionState::isPlaying() const {
@@ -1946,19 +2224,25 @@ index 0000000000000..5a3d55e66d4fc
 +  return HostToLocalTime(start_stop_->time);
 +}
 +
-+void TempoSessionState::setIsPlaying(bool playing, double atTime) {
-+  base::TimeTicks host_time = LocalToHostTime(atTime);
++void TempoSessionState::setIsPlaying(bool playing, double at_time) {
++  base::TimeTicks host_time = LocalToHostTime(at_time);
 +  start_stop_->is_playing = playing;
 +  start_stop_->time = host_time;
-+  start_stop_->beat = BeatAtHostTime(host_time);
++  start_stop_->beat = SharedBeatAt(host_time);
++  playing_changed_ = true;
 +}
 +
-+mojom::blink::TimelinePtr TempoSessionState::CloneTimeline() const {
-+  return timeline_->Clone();
++void TempoSessionState::Trace(Visitor* visitor) const {
++  visitor->Trace(session_);
++  ScriptWrappable::Trace(visitor);
 +}
 +
-+mojom::blink::StartStopStatePtr TempoSessionState::CloneStartStop() const {
-+  return start_stop_->Clone();
++double TempoSessionState::EffectiveQuantum(double quantum) const {
++  return quantum > 0 ? quantum : default_quantum_;
++}
++
++double TempoSessionState::OffsetFor(double quantum) const {
++  return quantum * std::floor(beat_offset_ / quantum + 0.5);
 +}
 +
 +base::TimeTicks TempoSessionState::LocalToHostTime(double local_time) const {
@@ -1969,108 +2253,144 @@ index 0000000000000..5a3d55e66d4fc
 +  return local_time_origin_ + (host_time - host_time_origin_).InSecondsF();
 +}
 +
-+double TempoSessionState::BeatAtHostTime(base::TimeTicks host_time) const {
++double TempoSessionState::SharedBeatAt(base::TimeTicks host_time) const {
 +  double elapsed_seconds = (host_time - timeline_->time_origin).InSecondsF();
-+  double beats_per_second = timeline_->tempo_bpm / 60.0;
-+  return timeline_->beat_origin + elapsed_seconds * beats_per_second;
++  return timeline_->beat_origin + elapsed_seconds * (timeline_->tempo_bpm / 60.0);
 +}
 +
-+base::TimeTicks TempoSessionState::HostTimeAtBeat(double beat) const {
-+  double beats_per_second = timeline_->tempo_bpm / 60.0;
-+  double elapsed_seconds = (beat - timeline_->beat_origin) / beats_per_second;
++base::TimeTicks TempoSessionState::HostTimeAtSharedBeat(double beat) const {
++  double elapsed_seconds =
++      (beat - timeline_->beat_origin) / (timeline_->tempo_bpm / 60.0);
 +  return timeline_->time_origin + base::Seconds(elapsed_seconds);
 +}
 +
 +}  // namespace blink
-\ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h
 new file mode 100644
-index 0000000000000..54458f66baa92
+index 0000000..43d5c6c
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.h
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,90 @@
 +#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_STATE_H_
 +#define THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_STATE_H_
 +
 +#include "third_party/blink/public/mojom/tempo_sync/tempo_sync.mojom-blink.h"
 +#include "third_party/blink/renderer/platform/bindings/script_wrappable.h"
++#include "third_party/blink/renderer/platform/heap/member.h"
 +
 +namespace blink {
 +
 +class ExceptionState;
++class TempoSession;
 +
++// A snapshot of the tempo session (https://bayl.es/web-tempo-sync/#interface-temposessionstate).
++//
++// Participants share tempo and bar phase; each session numbers beats its own way, by a beat
++// offset that only changes that session's numbering. For a quantum q the offset is rounded to a
++// multiple of q, so a session's beats keep the shared phase for every quantum.
 +class TempoSessionState final : public ScriptWrappable {
 +  DEFINE_WRAPPERTYPEINFO();
 +
 + public:
-+  TempoSessionState(mojom::blink::TimelinePtr timeline,
++  TempoSessionState(TempoSession* session,
++                    mojom::blink::TimelinePtr timeline,
 +                    mojom::blink::StartStopStatePtr start_stop,
 +                    base::TimeTicks host_time_origin,
-+                    double local_time_origin, double session_quantum);
++                    double local_time_origin,
++                    double beat_offset,
++                    double default_quantum,
++                    bool solo);
 +
 +  // WebIDL
 +  double tempo() const;
-+  void setTempo(double bpm, double atTime);
++  void setTempo(double bpm, double at_time, ExceptionState& exception_state);
 +
-+  double beatAtTime(double time, double quantum);
 +  double beatAtTime(double time);
-+
-+  double phaseAtTime(double time, double quantum);
++  double beatAtTime(double time, double quantum);
 +  double phaseAtTime(double time);
-+
-+  double timeAtBeat(double beat, double quantum);
++  double phaseAtTime(double time, double quantum);
 +  double timeAtBeat(double beat);
-+
-+  void requestBeatAtTime(double beat, double time, double quantum);
++  double timeAtBeat(double beat, double quantum);
 +  void requestBeatAtTime(double beat, double time);
-+
-+  void forceBeatAtTime(double beat, double time, double quantum);
++  void requestBeatAtTime(double beat, double time, double quantum);
 +  void forceBeatAtTime(double beat, double time);
++  void forceBeatAtTime(double beat, double time, double quantum);
 +
 +  bool isPlaying() const;
 +  double timeForIsPlaying() const;
-+  void setIsPlaying(bool playing, double atTime);
++  void setIsPlaying(bool playing, double at_time);
 +
-+  // Internal
-+  mojom::blink::TimelinePtr CloneTimeline() const;
-+  mojom::blink::StartStopStatePtr CloneStartStop() const;
++  // For TempoSession::commitState().
++  TempoSession* session() const { return session_.Get(); }
++  bool committed() const { return committed_; }
++  void MarkCommitted() { committed_ = true; }
++  double beat_offset() const { return beat_offset_; }
++  bool timeline_changed() const { return timeline_changed_; }
++  bool playing_changed() const { return playing_changed_; }
++  mojom::blink::TimelinePtr CloneTimeline() const { return timeline_->Clone(); }
++  mojom::blink::StartStopStatePtr CloneStartStop() const { return start_stop_->Clone(); }
++
++  void Trace(Visitor* visitor) const override;
 +
 + private:
++  // The method's quantum argument if it's positive, otherwise the session's.
++  double EffectiveQuantum(double quantum) const;
++  // The beat offset rounded to a multiple of |quantum|, halves going up.
++  double OffsetFor(double quantum) const;
++
 +  base::TimeTicks LocalToHostTime(double local_time) const;
 +  double HostToLocalTime(base::TimeTicks host_time) const;
-+  double BeatAtHostTime(base::TimeTicks host_time) const;
-+  base::TimeTicks HostTimeAtBeat(double beat) const;
++  double SharedBeatAt(base::TimeTicks host_time) const;
++  base::TimeTicks HostTimeAtSharedBeat(double beat) const;
 +
++  Member<TempoSession> session_;
 +  mojom::blink::TimelinePtr timeline_;
 +  mojom::blink::StartStopStatePtr start_stop_;
 +  base::TimeTicks host_time_origin_;
 +  double local_time_origin_;
-+  double session_quantum_;
++  double beat_offset_;
++  double default_quantum_;
++  // Whether no one else was in the session at capture: requestBeatAtTime() then places the
++  // beat exactly instead of waiting for the bar line.
++  bool solo_;
++  bool timeline_changed_ = false;
++  bool playing_changed_ = false;
++  bool committed_ = false;
 +};
 +
 +}  // namespace blink
 +
 +#endif  // THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SESSION_STATE_H_
-\ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.idl b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.idl
 new file mode 100644
-index 0000000000000..c6798030ceb32
+index 0000000..c1af119
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_session_state.idl
-@@ -0,0 +1,6 @@
-+[Exposed=Window, SecureContext, RuntimeEnabled=TempoSync] interface TempoSessionState {
-+  readonly attribute double tempo; undefined setTempo(double bpm, double atTime);
-+  double beatAtTime(double time, optional double quantum); double phaseAtTime(double time, optional double quantum); double timeAtBeat(double beat, optional double quantum);
-+  undefined requestBeatAtTime(double beat, double time, optional double quantum); undefined forceBeatAtTime(double beat, double time, optional double quantum);
-+  readonly attribute boolean isPlaying; readonly attribute double timeForIsPlaying; undefined setIsPlaying(boolean playing, double atTime);
+@@ -0,0 +1,18 @@
++// https://bayl.es/web-tempo-sync/#interface-temposessionstate
++//
++// The draft also makes this [Serializable] and exposes it to Workers and AudioWorklets; that
++// isn't implemented in this prototype yet.
++
++[Exposed=Window, SecureContext, RuntimeEnabled=TempoSync]
++interface TempoSessionState {
++  readonly attribute double tempo;
++  [RaisesException] undefined setTempo(double bpm, double atTime);
++  double beatAtTime(double time, optional double quantum);
++  double phaseAtTime(double time, optional double quantum);
++  double timeAtBeat(double beat, optional double quantum);
++  undefined requestBeatAtTime(double beat, double time, optional double quantum);
++  undefined forceBeatAtTime(double beat, double time, optional double quantum);
++  readonly attribute boolean isPlaying;
++  readonly attribute double timeForIsPlaying;
++  undefined setIsPlaying(boolean playing, double atTime);
 +};
-\ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_sync.cc b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.cc
 new file mode 100644
-index 0000000000000..d43bf7e721381
+index 0000000..33ee28a
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.cc
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,93 @@
 +#include "third_party/blink/renderer/modules/tempo_sync/tempo_sync.h"
 +
 +#include "third_party/blink/public/platform/browser_interface_broker_proxy.h"
@@ -2108,9 +2428,13 @@ index 0000000000000..d43bf7e721381
 +      script_state, exception_state.GetContext());
 +  auto promise = resolver->Promise();
 +
++  if (!(options->quantum() > 0)) {
++    exception_state.ThrowRangeError("quantum must be positive");
++    return EmptyPromise();
++  }
++
 +  auto mojom_options = mojom::blink::TempoSessionOptions::New();
 +  mojom_options->quantum = options->quantum();
-+  mojom_options->start_stop_sync = options->startStopSync();
 +
 +  auto* session = MakeGarbageCollected<TempoSession>(GetExecutionContext(), options);
 +  auto client = session->BindNewPipeAndPassRemote();
@@ -2130,6 +2454,7 @@ index 0000000000000..d43bf7e721381
 +    mojom::blink::TimelinePtr timeline,
 +    mojom::blink::StartStopStatePtr start_stop,
 +    uint32_t num_peers,
++    uint32_t session_count,
 +    const String& error_message) {
 +  if (!resolver->GetExecutionContext() ||
 +      resolver->GetExecutionContext()->IsContextDestroyed()) {
@@ -2143,9 +2468,8 @@ index 0000000000000..d43bf7e721381
 +  }
 +
 +  session->BindRemote(std::move(session_remote));
-+  if (timeline) session->OnTimelineChanged(std::move(timeline));
-+  if (start_stop) session->OnStartStopChanged(std::move(start_stop));
-+  session->OnNumPeersChanged(num_peers);
++  session->Seed(std::move(timeline), std::move(start_stop), num_peers,
++                session_count);
 +  resolver->Resolve(session);
 +}
 +
@@ -2163,10 +2487,10 @@ index 0000000000000..d43bf7e721381
 \ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_sync.h b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.h
 new file mode 100644
-index 0000000000000..e5d1705e1d8f2
+index 0000000..4ed96da
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.h
-@@ -0,0 +1,51 @@
+@@ -0,0 +1,52 @@
 +#ifndef THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SYNC_H_
 +#define THIRD_PARTY_BLINK_RENDERER_MODULES_TEMPO_SYNC_TEMPO_SYNC_H_
 +
@@ -2210,6 +2534,7 @@ index 0000000000000..e5d1705e1d8f2
 +                          mojom::blink::TimelinePtr timeline,
 +                          mojom::blink::StartStopStatePtr start_stop,
 +                          uint32_t num_peers,
++                          uint32_t session_count,
 +                          const String& error_message);
 +
 +  HeapMojoRemote<mojom::blink::TempoSyncService> service_;
@@ -2221,14 +2546,18 @@ index 0000000000000..e5d1705e1d8f2
 \ No newline at end of file
 diff --git a/third_party/blink/renderer/modules/tempo_sync/tempo_sync.idl b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.idl
 new file mode 100644
-index 0000000000000..234dae262c4e0
+index 0000000..aee1ec2
 --- /dev/null
 +++ b/third_party/blink/renderer/modules/tempo_sync/tempo_sync.idl
-@@ -0,0 +1 @@
-+[Exposed=Window, SecureContext, RuntimeEnabled=TempoSync] interface TempoSync { [CallWith=ScriptState, RaisesException] Promise<TempoSession> requestSession(optional TempoSessionOptions options = {}); };
-\ No newline at end of file
+@@ -0,0 +1,6 @@
++// https://bayl.es/web-tempo-sync/#interface-temposync
++
++[Exposed=Window, SecureContext, RuntimeEnabled=TempoSync]
++interface TempoSync {
++  [CallWith=ScriptState, RaisesException] Promise<TempoSession> requestSession(optional TempoSessionOptions options = {});
++};
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.cc b/third_party/blink/renderer/modules/webaudio/audio_context.cc
-index 1b7598ba4364f..e8cb85a441bfb 100644
+index 1b7598b..e8cb85a 100644
 --- a/third_party/blink/renderer/modules/webaudio/audio_context.cc
 +++ b/third_party/blink/renderer/modules/webaudio/audio_context.cc
 @@ -2457,4 +2457,10 @@ void AudioContext::RejectPendingResumeResolversWithException(
@@ -2243,7 +2572,7 @@ index 1b7598ba4364f..e8cb85a441bfb 100644
 +
  }  // namespace blink
 diff --git a/third_party/blink/renderer/modules/webaudio/audio_context.h b/third_party/blink/renderer/modules/webaudio/audio_context.h
-index 5548c84d187c6..06d50d14181fb 100644
+index 5548c84..06d50d1 100644
 --- a/third_party/blink/renderer/modules/webaudio/audio_context.h
 +++ b/third_party/blink/renderer/modules/webaudio/audio_context.h
 @@ -224,6 +224,7 @@ class MODULES_EXPORT AudioContext final
@@ -2255,10 +2584,10 @@ index 5548c84d187c6..06d50d14181fb 100644
    ScriptPromise<IDLUndefined> suspendContext(ScriptState*, ExceptionState&);
    ScriptPromise<IDLUndefined> closeContext(ScriptState*, ExceptionState&);
 diff --git a/third_party/blink/renderer/platform/runtime_enabled_features.json5 b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-index fae98ab3ff706..282ca9c511507 100644
+index a9c72eb..a26cc57 100644
 --- a/third_party/blink/renderer/platform/runtime_enabled_features.json5
 +++ b/third_party/blink/renderer/platform/runtime_enabled_features.json5
-@@ -7217,6 +7217,10 @@
+@@ -7452,6 +7452,10 @@
  
      // WebBluetooth is enabled by default on Android, ChromeOS, iOS, macOS and
      // Windows.
@@ -2271,7 +2600,7 @@ index fae98ab3ff706..282ca9c511507 100644
        public: true,
 diff --git a/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-manual.html b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-manual.html
 new file mode 100644
-index 0000000000000..16749ff654b0f
+index 0000000..b199b9c
 --- /dev/null
 +++ b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-manual.html
 @@ -0,0 +1,58 @@
@@ -2291,12 +2620,12 @@ index 0000000000000..16749ff654b0f
 +
 +document.getElementById('requestBtn').addEventListener('click', async () => {
 +  try {
-+    session = await navigator.tempoSync.requestSession({ quantum: 4, startStopSync: true });
++    session = await navigator.tempoSync.requestSession({ quantum: 4 });
 +    document.getElementById('commitTempoBtn').disabled = false;
 +    
-+    session.ontempochange = () => console.log('Tempo changed');
++    session.ontimelinechange = () => console.log('Timeline changed, tempo', session.captureState().tempo);
 +    session.onplayingchange = () => console.log('Playing changed');
-+    session.onnumpeerschange = () => console.log('Num peers:', session.numPeers);
++    session.onpeerschange = () => console.log('Has peers:', session.hasPeers);
 +    
 +    if (!af) {
 +      af = requestAnimationFrame(update);
@@ -2336,7 +2665,7 @@ index 0000000000000..16749ff654b0f
 \ No newline at end of file
 diff --git a/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-peers-manual.html b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-peers-manual.html
 new file mode 100644
-index 0000000000000..92fbce67677f9
+index 0000000..2ebcb4e
 --- /dev/null
 +++ b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session-peers-manual.html
 @@ -0,0 +1,32 @@
@@ -2352,14 +2681,14 @@ index 0000000000000..92fbce67677f9
 +  try {
 +    log('start typeof navigator.tempoSync=' + typeof navigator.tempoSync);
 +    const session = await navigator.tempoSync.requestSession({ quantum: 4 });
-+    log('session acquired peers=' + session.numPeers);
-+    session.addEventListener('numpeerschange', () => log('event numpeerschange peers=' + session.numPeers));
-+    session.addEventListener('tempochange', () => log('event tempochange tempo=' + session.captureState().tempo));
++    log('session acquired hasPeers=' + session.hasPeers);
++    session.addEventListener('peerschange', () => log('event peerschange hasPeers=' + session.hasPeers));
++    session.addEventListener('timelinechange', () => log('event timelinechange tempo=' + session.captureState().tempo));
 +    const ctx = new AudioContext();
 +    setInterval(() => {
 +      const s = session.captureState();
 +      const t = performance.now() / 1000;
-+      log(`t=${t.toFixed(2)} peers=${session.numPeers} tempo=${s.tempo.toFixed(3)} beat=${s.beatAtTime(t).toFixed(3)} phase=${s.phaseAtTime(t).toFixed(3)} playing=${s.isPlaying}`);
++      log(`t=${t.toFixed(2)} hasPeers=${session.hasPeers} tempo=${s.tempo.toFixed(3)} beat=${s.beatAtTime(t).toFixed(3)} phase=${s.phaseAtTime(t).toFixed(3)} playing=${s.isPlaying}`);
 +    }, 500);
 +    setTimeout(() => {
 +      const s = session.captureState();
@@ -2374,36 +2703,130 @@ index 0000000000000..92fbce67677f9
 +</script></body></html>
 diff --git a/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session.html b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session.html
 new file mode 100644
-index 0000000000000..01569274245fc
+index 0000000..1ca90bd
 --- /dev/null
 +++ b/third_party/blink/web_tests/wpt_internal/tempo_sync/tempo-session.html
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,117 @@
 +<!DOCTYPE html>
++<!-- Run with the fake engine (no network):
++     --additional-driver-flag=--enable-blink-features=TempoSync
++     --additional-driver-flag=--tempo-sync-engine=fake -->
 +<script src="/resources/testharness.js"></script>
 +<script src="/resources/testharnessreport.js"></script>
 +<script>
++const now = () => performance.now() / 1000;
++const phase = (b, q) => ((b % q) + q) % q;
++const close = (a, b, eps = 1e-6) => Math.abs(a - b) < eps;
++const nextTask = () => new Promise(r => setTimeout(r, 50));
++
 +promise_test(async t => {
 +  assert_true('tempoSync' in navigator, 'navigator.tempoSync exists');
-+  
 +  const session = await navigator.tempoSync.requestSession();
-+  assert_equals(session.quantum, 4, 'default quantum is 4');
-+  assert_equals(session.numPeers, 0, 'initial numPeers is 0');
-+  
++  t.add_cleanup(() => session.close());
++  assert_equals(session.quantum, 4, 'default quantum');
++  assert_false(session.hasPeers, 'alone with the fake engine');
++  assert_false('numPeers' in session, 'numPeers is gone');
 +  const state = session.captureState();
-+  assert_true(state !== null, 'captureState returns a state');
-+  
-+  assert_equals(state.tempo, 120, 'fake engine initial tempo is 120');
-+  assert_equals(state.isPlaying, true, 'fake engine initial isPlaying is true');
-+  
-+  const time = performance.now() / 1000;
-+  const beat = state.beatAtTime(time);
-+  assert_true(typeof beat === 'number' && !isNaN(beat), 'beatAtTime returns a number');
-+}, 'TempoSync API surface and basic captureState from fake engine');
++  assert_equals(state.tempo, 120, 'fake engine tempo');
++  assert_true(Number.isFinite(state.beatAtTime(now())), 'beatAtTime is a number');
++}, 'API surface');
++
++promise_test(async t => {
++  await promise_rejects_js(t, RangeError, navigator.tempoSync.requestSession({ quantum: 0 }));
++  await promise_rejects_js(t, TypeError, navigator.tempoSync.requestSession({ quantum: NaN }));
++  const session = await navigator.tempoSync.requestSession();
++  t.add_cleanup(() => session.close());
++  assert_throws_js(TypeError, () => session.captureState(null), 'null is not a context');
++  assert_throws_js(RangeError, () => session.captureState().setTempo(0, now()));
++}, 'Argument checks');
++
++promise_test(async t => {
++  const session = await navigator.tempoSync.requestSession();
++  t.add_cleanup(() => session.close());
++  let events = 0;
++  session.ontimelinechange = () => events++;
++  session.commitState(session.captureState());
++  await nextTask();
++  assert_equals(events, 0, 'an unchanged state shares nothing');
++
++  const state = session.captureState();
++  state.setTempo(97, now());
++  session.commitState(state);
++  assert_equals(session.captureState().tempo, 97, 'visible at once, before the engine echoes');
++  assert_equals(events, 0, 'events are queued, not fired inside commitState');
++  await nextTask();
++  assert_equals(events, 1, 'one timelinechange');
++}, 'Commits share only changes, apply at once, and queue events');
++
++promise_test(async t => {
++  const a = await navigator.tempoSync.requestSession();
++  t.add_cleanup(() => a.close());
++  let peerEvents = 0;
++  a.onpeerschange = () => peerEvents++;
++  const b = await navigator.tempoSync.requestSession();
++  t.add_cleanup(() => b.close());
++  await nextTask();
++  assert_true(a.hasPeers, 'another session in the browser is a participant');
++  assert_true(b.hasPeers);
++  assert_equals(peerEvents, 1, 'a heard b arrive');
++  b.close();
++  await nextTask();
++  assert_false(a.hasPeers, 'and leave');
++}, 'hasPeers counts other sessions');
++
++promise_test(async t => {
++  const a = await navigator.tempoSync.requestSession();
++  const b = await navigator.tempoSync.requestSession();
++  t.add_cleanup(() => { a.close(); b.close(); });
++  await nextTask();
++  const tm = now();
++  const before = b.captureState();
++  const s = a.captureState();
++  s.requestBeatAtTime(0, tm, 4);
++  const launch = s.timeAtBeat(0, 4);
++  assert_true(launch >= tm - 1e-9 && launch - tm <= 2 + 1e-6, 'within a bar (2 s at 120 bpm)');
++  assert_true(close(phase(s.beatAtTime(launch, 4), 4), 0), 'beat 0 is on a bar line');
++  assert_true(close(s.phaseAtTime(tm, 4), before.phaseAtTime(tm, 4)), 'the shared phase is unchanged');
++  a.commitState(s);
++  assert_true(close(b.captureState().beatAtTime(tm, 4), before.beatAtTime(tm, 4)), "b's beats are untouched");
++  assert_true(close(a.captureState().beatAtTime(launch, 4), 0), 'a keeps its numbering');
++  for (const q of [3, 4, 7]) {
++    const st = a.captureState();
++    const beat = st.beatAtTime(tm + 0.3, q);
++    assert_true(close(phase(beat, q), st.phaseAtTime(tm + 0.3, q)), `shared phase for quantum ${q}`);
++    assert_true(close(st.timeAtBeat(beat, q), tm + 0.3), `round trip for quantum ${q}`);
++  }
++}, 'With others present, requestBeatAtTime waits for the bar line and moves only this numbering');
++
++promise_test(async t => {
++  const session = await navigator.tempoSync.requestSession();
++  t.add_cleanup(() => session.close());
++  const tm = now();
++  const s = session.captureState();
++  const shared = s.phaseAtTime(tm, 4);
++  s.requestBeatAtTime(0, tm, 4);
++  assert_true(close(s.beatAtTime(tm, 4), 0), 'alone, beat 0 lands exactly at the time');
++  const shift = phase(-shared, 4);
++  assert_true(Math.min(shift, 4 - shift) <= 2 + 1e-9, 'the grid moves by at most half a quantum');
++}, 'Alone, requestBeatAtTime forces, and forcing moves the grid by at most half a quantum');
++
++promise_test(async t => {
++  const a = await navigator.tempoSync.requestSession();
++  const b = await navigator.tempoSync.requestSession();
++  t.add_cleanup(() => b.close());
++  const state = a.captureState();
++  state.setTempo(100, now());
++  a.commitState(state);
++  assert_throws_dom('InvalidStateError', () => a.commitState(state), 'committed twice');
++  assert_throws_dom('InvalidModificationError', () => b.commitState(a.captureState()), "another session's state");
++  a.close();
++  assert_throws_dom('InvalidStateError', () => a.captureState(), 'closed');
++  assert_false(a.hasPeers, 'a closed session has no peers');
++}, 'Misuse throws the draft’s exceptions');
 +</script>
-\ No newline at end of file
 diff --git a/third_party/tempo_sync_core/BUILD.gn b/third_party/tempo_sync_core/BUILD.gn
 new file mode 100644
-index 0000000000000..e08bcc0a198ff
+index 0000000..e08bcc0
 --- /dev/null
 +++ b/third_party/tempo_sync_core/BUILD.gn
 @@ -0,0 +1,19 @@
@@ -2428,7 +2851,7 @@ index 0000000000000..e08bcc0a198ff
 +}
 diff --git a/third_party/tempo_sync_core/Cargo.toml b/third_party/tempo_sync_core/Cargo.toml
 new file mode 100644
-index 0000000000000..bc129cecf370a
+index 0000000..bc129ce
 --- /dev/null
 +++ b/third_party/tempo_sync_core/Cargo.toml
 @@ -0,0 +1,6 @@
@@ -2440,14 +2863,14 @@ index 0000000000000..bc129cecf370a
 +[dependencies]
 diff --git a/third_party/tempo_sync_core/README.chromium b/third_party/tempo_sync_core/README.chromium
 new file mode 100644
-index 0000000000000..ba4c30bcc2e1a
+index 0000000..979a495
 --- /dev/null
 +++ b/third_party/tempo_sync_core/README.chromium
 @@ -0,0 +1,10 @@
 +Name: Web Tempo Sync Core Engine
 +Short Name: tempo_sync_core
-+URL: https://example.com/
-+Version: 0.1.0
++URL: https://github.com/baylesj/tempo-sync
++Version: 0.2.0
 +License: Apache-2.0
 +License File: NOT_SHIPPED
 +Security Critical: yes
@@ -2456,7 +2879,7 @@ index 0000000000000..ba4c30bcc2e1a
 +Rust core engine for Web Tempo Sync prototype.
 diff --git a/third_party/tempo_sync_core/src/discovery.rs b/third_party/tempo_sync_core/src/discovery.rs
 new file mode 100644
-index 0000000000000..5316940b46f8b
+index 0000000..5316940
 --- /dev/null
 +++ b/third_party/tempo_sync_core/src/discovery.rs
 @@ -0,0 +1,2 @@
@@ -2464,23 +2887,24 @@ index 0000000000000..5316940b46f8b
 +// Discovery logic will be handled inside Engine, or we can just put it there.
 diff --git a/third_party/tempo_sync_core/src/engine.rs b/third_party/tempo_sync_core/src/engine.rs
 new file mode 100644
-index 0000000000000..1574940ee77e1
+index 0000000..bb4dab8
 --- /dev/null
 +++ b/third_party/tempo_sync_core/src/engine.rs
-@@ -0,0 +1,562 @@
+@@ -0,0 +1,653 @@
 +// SPDX-License-Identifier: Apache-2.0
 +
-+use std::collections::HashMap;
 +use crate::time::HostTime;
-+use crate::timeline::{SessionState, Timeline, StartStopState};
-+use crate::wire::{Message, DiscoveryMsg, MeasurementMsg, NodeId, serialize_discovery_alive, serialize_discovery_byebye, serialize_measurement_ping, serialize_measurement_pong};
++use crate::timeline::{SessionState, StartStopState, Timeline};
++use crate::wire::{
++    serialize_discovery_alive, serialize_discovery_byebye, serialize_measurement_ping,
++    serialize_measurement_pong, DiscoveryMsg, MeasurementMsg, Message, NodeId,
++};
++use std::collections::HashMap;
 +
 +#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 +pub struct InterfaceId(pub u32);
 +
-+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-+
-+#[derive(Default)]
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 +pub struct SocketAddrPlain {
 +    pub ip: [u8; 4],
 +    pub port: u16,
@@ -2524,7 +2948,7 @@ index 0000000000000..1574940ee77e1
 +    pub start_stop_ghost: Option<StartStopState>,
 +    pub last_seen: HostTime,
 +    pub addr: SocketAddrPlain,
-+    
++
 +    pub offsets: Vec<i64>, // Up to 100 samples
 +    pub next_ping_time: HostTime,
 +    pub ping_timeouts: u32,
@@ -2545,9 +2969,11 @@ index 0000000000000..1574940ee77e1
 +            measuring: true,
 +        }
 +    }
-+    
++
 +    pub fn median_offset(&self) -> i64 {
-+        if self.offsets.is_empty() { return 0; }
++        if self.offsets.is_empty() {
++            return 0;
++        }
 +        let mut sorted = self.offsets.clone();
 +        sorted.sort_unstable();
 +        sorted[sorted.len() / 2]
@@ -2560,12 +2986,12 @@ index 0000000000000..1574940ee77e1
 +    pub session_id: NodeId,
 +    pub session_offset: i64,
 +    pub state: SessionState, // In HostTime
-+    
++
 +    pub interfaces: HashMap<InterfaceId, SocketAddrPlain>,
 +    pub peers: HashMap<NodeId, PeerState>,
 +    pub dump_packets: bool,
 +    pub num_session_peers: u32,
-+    
++
 +    pub next_broadcast: HostTime,
 +}
 +
@@ -2586,45 +3012,62 @@ index 0000000000000..1574940ee77e1
 +    }
 +
 +    fn produce_outputs(&mut self, now: HostTime, outputs: &mut Vec<Output>) {
-+        if !self.enabled { return; }
-+        
++        if !self.enabled {
++            return;
++        }
++
 +        let mut next_timer = HostTime(i64::MAX);
 +
 +        // Discovery broadcast
 +        if now.0 >= self.next_broadcast.0 {
 +            // Serialize in Ghost Time
 +            let mut ghost_tl = self.state.timeline.clone();
-+            ghost_tl.time_origin = HostTime(ghost_tl.time_origin.0.wrapping_add(self.session_offset));
++            ghost_tl.time_origin =
++                HostTime(ghost_tl.time_origin.0.wrapping_add(self.session_offset));
 +            let mut ghost_ss = self.state.start_stop.clone();
 +            ghost_ss.time = HostTime(ghost_ss.time.0.wrapping_add(self.session_offset));
 +
 +            for (&iface_id, mep4) in &self.interfaces {
-+                let msg = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss, Some(*mep4), false);
-+                if self.dump_packets { eprintln!("SEND MULTICAST ALIVE: {:x?}", msg); }
++                let msg = serialize_discovery_alive(
++                    &self.node_id,
++                    &self.session_id,
++                    &ghost_tl,
++                    &ghost_ss,
++                    Some(*mep4),
++                    false,
++                );
++                if self.dump_packets {
++                    eprintln!("SEND MULTICAST ALIVE: {:x?}", msg);
++                }
 +                outputs.push(Output::Send {
 +                    iface_id,
-+                    to: SocketAddrPlain { ip: [224, 76, 78, 75], port: 20808 },
++                    to: SocketAddrPlain {
++                        ip: [224, 76, 78, 75],
++                        port: 20808,
++                    },
 +                    bytes: msg,
 +                });
 +            }
 +            // "A hard floor of 50ms is enforced... nominal interval is 250ms"
-+            self.next_broadcast = HostTime(now.0 + 250_000); 
++            self.next_broadcast = HostTime(now.0 + 250_000);
 +        }
 +        if self.next_broadcast.0 < next_timer.0 {
 +            next_timer = self.next_broadcast;
 +        }
 +
 +        // Pings
-+        for (_peer_id, peer) in self.peers.iter_mut() {
++        for peer in self.peers.values_mut() {
 +            if peer.measuring && now.0 >= peer.next_ping_time.0 {
 +                if peer.ping_timeouts >= 5 {
 +                    peer.measuring = false;
 +                    continue;
 +                }
 +                peer.ping_timeouts += 1;
-+                
++
 +                let ping = serialize_measurement_ping(now, None);
-+                if self.dump_packets { eprintln!("SEND PING (INIT): {:x?}", ping); }
++                if self.dump_packets {
++                    eprintln!("SEND PING (INIT): {:x?}", ping);
++                }
 +                for &iface_id in self.interfaces.keys() {
 +                    outputs.push(Output::Send {
 +                        iface_id,
@@ -2638,7 +3081,7 @@ index 0000000000000..1574940ee77e1
 +                next_timer = peer.next_ping_time;
 +            }
 +        }
-+        
++
 +        // Peer timeouts (6s)
 +        let timeout = HostTime(now.0 - 6_000_000);
 +        let old_len = self.peers.len();
@@ -2646,7 +3089,7 @@ index 0000000000000..1574940ee77e1
 +        if self.peers.len() != old_len {
 +            self.resolve_session(now, outputs);
 +        }
-+        
++
 +        // Wakeup for next timeout
 +        let mut min_last_seen = HostTime(i64::MAX);
 +        for peer in self.peers.values() {
@@ -2664,7 +3107,7 @@ index 0000000000000..1574940ee77e1
 +        if next_timer.0 != i64::MAX {
 +            outputs.push(Output::SetTimer { at: next_timer });
 +        }
-+        
++
 +        let mut session_peers = 0;
 +        for peer in self.peers.values() {
 +            if peer.session_id == Some(self.session_id) {
@@ -2677,19 +3120,39 @@ index 0000000000000..1574940ee77e1
 +        }
 +    }
 +
-+    pub fn handle_packet(&mut self, iface_id: InterfaceId, from: SocketAddrPlain, bytes: &[u8], now: HostTime) -> Vec<Output> {
++    pub fn handle_packet(
++        &mut self,
++        iface_id: InterfaceId,
++        from: SocketAddrPlain,
++        bytes: &[u8],
++        now: HostTime,
++    ) -> Vec<Output> {
 +        let mut outputs = Vec::new();
-+        if !self.enabled { return outputs; }
-+        if self.dump_packets { eprintln!("RECV MSG: {:x?}", bytes); }
++        if !self.enabled {
++            return outputs;
++        }
++        if self.dump_packets {
++            eprintln!("RECV MSG: {:x?}", bytes);
++        }
 +        if let Some(msg) = crate::wire::parse_message(bytes) {
 +            match msg {
-+                Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id, mep4 }) => {
-+                    if node_id == self.node_id { return outputs; } // Ignore self
-+                    
-+                    let is_new = !self.peers.contains_key(&node_id);
++                Message::Discovery(DiscoveryMsg::Alive {
++                    node_id,
++                    timeline,
++                    start_stop,
++                    session_id,
++                    mep4,
++                }) => {
++                    if node_id == self.node_id {
++                        return outputs;
++                    } // Ignore self
++
 +                    let mut needs_resolution = false;
 +
-+                    let peer = self.peers.entry(node_id).or_insert_with(|| PeerState::new(from, now));
++                    let peer = self
++                        .peers
++                        .entry(node_id)
++                        .or_insert_with(|| PeerState::new(from, now));
 +                    peer.last_seen = now;
 +                    peer.addr = mep4.unwrap_or(from);
 +
@@ -2701,29 +3164,40 @@ index 0000000000000..1574940ee77e1
 +                        peer.next_ping_time = now;
 +                    }
 +
-+                    if peer.timeline_ghost != timeline || peer.start_stop_ghost != start_stop || session_changed {
++                    if peer.timeline_ghost != timeline
++                        || peer.start_stop_ghost != start_stop
++                        || session_changed
++                    {
 +                        peer.timeline_ghost = timeline;
 +                        peer.start_stop_ghost = start_stop;
 +                        peer.session_id = session_id;
 +                        needs_resolution = !peer.offsets.is_empty();
-+                        
++
 +                        // Send Response
 +                        let mut ghost_tl = self.state.timeline.clone();
-+                        ghost_tl.time_origin = HostTime(ghost_tl.time_origin.0.wrapping_add(self.session_offset));
++                        ghost_tl.time_origin =
++                            HostTime(ghost_tl.time_origin.0.wrapping_add(self.session_offset));
 +                        let mut ghost_ss = self.state.start_stop.clone();
 +                        ghost_ss.time = HostTime(ghost_ss.time.0.wrapping_add(self.session_offset));
 +                        let mep4 = self.interfaces.get(&iface_id).copied();
-+                        let resp = serialize_discovery_alive(&self.node_id, &self.session_id, &ghost_tl, &ghost_ss, mep4, true);
-+                        if self.dump_packets { eprintln!("SEND RESPONSE ALIVE: {:x?}", resp); }
++                        let resp = serialize_discovery_alive(
++                            &self.node_id,
++                            &self.session_id,
++                            &ghost_tl,
++                            &ghost_ss,
++                            mep4,
++                            true,
++                        );
++                        if self.dump_packets {
++                            eprintln!("SEND RESPONSE ALIVE: {:x?}", resp);
++                        }
 +                        outputs.push(Output::Send {
 +                            iface_id,
 +                            to: peer.addr,
 +                            bytes: resp,
 +                        });
 +                    }
-+                    
-+                    if is_new {
-+                    }
++
 +                    if needs_resolution {
 +                        self.resolve_session(now, &mut outputs);
 +                    }
@@ -2733,18 +3207,29 @@ index 0000000000000..1574940ee77e1
 +                        self.resolve_session(now, &mut outputs);
 +                    }
 +                }
-+                Message::Measurement(MeasurementMsg::Ping { host_time: _, prev_ghost_time: _ }) => {
++                Message::Measurement(MeasurementMsg::Ping {
++                    host_time: _,
++                    prev_ghost_time: _,
++                }) => {
 +                    // Pong: `__gt` is our GhostTime
 +                    let our_ghost_time = HostTime(now.0.wrapping_add(self.session_offset));
-+                    let pong = serialize_measurement_pong(&self.session_id, our_ghost_time, &bytes[9..]);
-+                    if self.dump_packets { eprintln!("SEND PONG: {:x?}", pong); }
++                    let pong =
++                        serialize_measurement_pong(&self.session_id, our_ghost_time, &bytes[9..]);
++                    if self.dump_packets {
++                        eprintln!("SEND PONG: {:x?}", pong);
++                    }
 +                    outputs.push(Output::Send {
 +                        iface_id,
 +                        to: from,
 +                        bytes: pong,
 +                    });
 +                }
-+                Message::Measurement(MeasurementMsg::Pong { session_id, ghost_time: b_t2, ping_host_time: a_t2, ping_prev_ghost_time: prev_ghost_time }) => {
++                Message::Measurement(MeasurementMsg::Pong {
++                    session_id,
++                    ghost_time: b_t2,
++                    ping_host_time: a_t2,
++                    ping_prev_ghost_time: prev_ghost_time,
++                }) => {
 +                    {
 +                        let a_t3 = now;
 +                        let offset = if let Some(b_t1) = prev_ghost_time {
@@ -2754,12 +3239,15 @@ index 0000000000000..1574940ee77e1
 +                        } else {
 +                            b_t2.0.wrapping_sub((a_t3.0.wrapping_add(a_t2.0)) / 2)
 +                        };
-+                        
++
 +                        let mut found_node_id = None;
 +                        for (id, peer) in &self.peers {
-+                            if peer.addr == from { found_node_id = Some(*id); break; }
++                            if peer.addr == from {
++                                found_node_id = Some(*id);
++                                break;
++                            }
 +                        }
-+                        
++
 +                        if let Some(id) = found_node_id {
 +                            let peer = self.peers.get_mut(&id).unwrap();
 +                            if let Some(pong_sess) = session_id {
@@ -2776,7 +3264,9 @@ index 0000000000000..1574940ee77e1
 +                                } else {
 +                                    // Send immediate follow-up
 +                                    let ping = serialize_measurement_ping(now, Some(b_t2));
-+                                    if self.dump_packets { eprintln!("SEND PING: {:x?}", ping); }
++                                    if self.dump_packets {
++                                        eprintln!("SEND PING: {:x?}", ping);
++                                    }
 +                                    outputs.push(Output::Send {
 +                                        iface_id,
 +                                        to: peer.addr,
@@ -2793,7 +3283,7 @@ index 0000000000000..1574940ee77e1
 +                }
 +            }
 +        }
-+        
++
 +        self.produce_outputs(now, &mut outputs);
 +        outputs
 +    }
@@ -2821,13 +3311,20 @@ index 0000000000000..1574940ee77e1
 +                if state.timeline.beat_origin.0 <= max_bo {
 +                    let new_bo = max_bo + 1_000_000;
 +                    let delta_mb = new_bo - state.timeline.beat_origin.0;
-+                    let delta_us = ((delta_mb as i128 * state.timeline.tempo.0 as i128) / 1_000_000) as i64;
++                    let delta_us =
++                        ((delta_mb as i128 * state.timeline.tempo.0 as i128) / 1_000_000) as i64;
 +                    state.timeline.beat_origin = crate::time::MicroBeats(new_bo);
-+                    state.timeline.time_origin = HostTime(state.timeline.time_origin.0.wrapping_add(delta_us));
++                    state.timeline.time_origin =
++                        HostTime(state.timeline.time_origin.0.wrapping_add(delta_us));
 +                }
 +            }
 +            if state.start_stop != self.state.start_stop {
-+                let mut max_ss_ghost = self.state.start_stop.time.0.wrapping_add(self.session_offset);
++                let mut max_ss_ghost = self
++                    .state
++                    .start_stop
++                    .time
++                    .0
++                    .wrapping_add(self.session_offset);
 +                for peer in self.peers.values() {
 +                    if peer.session_id == Some(self.session_id) {
 +                        if let Some(ref ss) = peer.start_stop_ghost {
@@ -2839,12 +3336,15 @@ index 0000000000000..1574940ee77e1
 +                }
 +                let committed_ss_ghost = state.start_stop.time.0.wrapping_add(self.session_offset);
 +                if committed_ss_ghost <= max_ss_ghost {
-+                    state.start_stop.time = HostTime((max_ss_ghost + 1).wrapping_sub(self.session_offset));
++                    state.start_stop.time =
++                        HostTime((max_ss_ghost + 1).wrapping_sub(self.session_offset));
 +                }
 +            }
 +            self.state = state;
-+            outputs.push(Output::StateChanged { state: self.state.clone() });
-+            
++            outputs.push(Output::StateChanged {
++                state: self.state.clone(),
++            });
++
 +            if self.enabled {
 +                self.next_broadcast = now;
 +                self.produce_outputs(now, &mut outputs);
@@ -2864,7 +3364,9 @@ index 0000000000000..1574940ee77e1
 +                }
 +                if self.state.timeline.time_origin.0 == 0 {
 +                    self.state.timeline.time_origin = now;
-+                    outputs.push(Output::StateChanged { state: self.state.clone() });
++                    outputs.push(Output::StateChanged {
++                        state: self.state.clone(),
++                    });
 +                }
 +                self.next_broadcast = now;
 +                self.produce_outputs(now, &mut outputs);
@@ -2873,7 +3375,10 @@ index 0000000000000..1574940ee77e1
 +                for &iface_id in self.interfaces.keys() {
 +                    outputs.push(Output::Send {
 +                        iface_id,
-+                        to: SocketAddrPlain { ip: [224, 76, 78, 75], port: 20808 },
++                        to: SocketAddrPlain {
++                            ip: [224, 76, 78, 75],
++                            port: 20808,
++                        },
 +                        bytes: msg.clone(),
 +                    });
 +                }
@@ -2890,7 +3395,11 @@ index 0000000000000..1574940ee77e1
 +        outputs
 +    }
 +
-+    pub fn add_interface(&mut self, iface_id: InterfaceId, local_addr: SocketAddrPlain) -> Vec<Output> {
++    pub fn add_interface(
++        &mut self,
++        iface_id: InterfaceId,
++        local_addr: SocketAddrPlain,
++    ) -> Vec<Output> {
 +        let outputs = Vec::new();
 +        self.interfaces.insert(iface_id, local_addr);
 +        // Note: join multicast logic handled outside, engine shouldn't emit OpenUnicast if it already receives the port.
@@ -2901,8 +3410,13 @@ index 0000000000000..1574940ee77e1
 +        self.interfaces.remove(&iface_id);
 +        Vec::new()
 +    }
-+    
-+    pub fn handle_io_error(&mut self, iface_id: InterfaceId, _error: IoErrorKind, _now: HostTime) -> Vec<Output> {
++
++    pub fn handle_io_error(
++        &mut self,
++        iface_id: InterfaceId,
++        _error: IoErrorKind,
++        _now: HostTime,
++    ) -> Vec<Output> {
 +        self.interfaces.remove(&iface_id);
 +        Vec::new()
 +    }
@@ -2911,17 +3425,17 @@ index 0000000000000..1574940ee77e1
 +        let mut best_session = self.session_id;
 +        let mut best_offset = self.session_offset;
 +        let mut our_ghost_time = now.0.wrapping_add(self.session_offset);
-+        
++
 +        let mut changed = false;
 +
-+        for (_id, peer) in &self.peers {
++        for peer in self.peers.values() {
 +            if peer.offsets.is_empty() {
 +                continue;
 +            }
 +            if let Some(peer_sess) = peer.session_id {
 +                let peer_offset = peer.median_offset();
 +                let peer_ghost_time = now.0.wrapping_add(peer_offset);
-+                
++
 +                if peer_sess == best_session {
 +                    if best_session != self.node_id && (best_offset - peer_offset).abs() > 500 {
 +                        best_offset = peer_offset;
@@ -2934,15 +3448,12 @@ index 0000000000000..1574940ee77e1
 +                let diff = peer_ghost_time.wrapping_sub(our_ghost_time);
 +                let older = diff > 500_000;
 +                let within_eps = diff.abs() <= 500_000;
-+                
-+                let win = if older {
-+                    true
-+                } else if within_eps && Self::compare_session_ids(&peer_sess, &best_session) == std::cmp::Ordering::Less {
-+                    true // Lexicographically smaller wins
-+                } else {
-+                    false
-+                };
-+                
++
++                let win = older
++                    || (within_eps
++                        && Self::compare_session_ids(&peer_sess, &best_session)
++                            == std::cmp::Ordering::Less);
++
 +                if win {
 +                    best_session = peer_sess;
 +                    best_offset = peer_offset;
@@ -2961,7 +3472,7 @@ index 0000000000000..1574940ee77e1
 +            self.session_offset = best_offset;
 +            changed = true;
 +        }
-+        
++
 +        // Find best timeline in current session
 +        let mut best_tl = if changed_session {
 +            None
@@ -2970,7 +3481,7 @@ index 0000000000000..1574940ee77e1
 +            tl.time_origin = HostTime(tl.time_origin.0.wrapping_add(self.session_offset));
 +            Some(tl)
 +        };
-+        
++
 +        for peer in self.peers.values() {
 +            if peer.session_id == Some(self.session_id) {
 +                if let Some(ref tl) = peer.timeline_ghost {
@@ -2981,10 +3492,11 @@ index 0000000000000..1574940ee77e1
 +                }
 +            }
 +        }
-+        
++
 +        if let Some(tl) = best_tl {
 +            let mut best_tl_host = tl;
-+            best_tl_host.time_origin = HostTime(best_tl_host.time_origin.0.wrapping_sub(self.session_offset));
++            best_tl_host.time_origin =
++                HostTime(best_tl_host.time_origin.0.wrapping_sub(self.session_offset));
 +            if best_tl_host != self.state.timeline {
 +                self.state.timeline = best_tl_host;
 +                changed = true;
@@ -2999,7 +3511,7 @@ index 0000000000000..1574940ee77e1
 +            ss.time = HostTime(ss.time.0.wrapping_add(self.session_offset));
 +            Some(ss)
 +        };
-+        
++
 +        for peer in self.peers.values() {
 +            if peer.session_id == Some(self.session_id) {
 +                if let Some(ref ss) = peer.start_stop_ghost {
@@ -3010,7 +3522,7 @@ index 0000000000000..1574940ee77e1
 +                }
 +            }
 +        }
-+        
++
 +        if let Some(ss) = best_ss {
 +            let mut best_ss_host = ss;
 +            best_ss_host.time = HostTime(best_ss_host.time.0.wrapping_sub(self.session_offset));
@@ -3021,39 +3533,41 @@ index 0000000000000..1574940ee77e1
 +        }
 +
 +        if changed {
-+            outputs.push(Output::StateChanged { state: self.state.clone() });
++            outputs.push(Output::StateChanged {
++                state: self.state.clone(),
++            });
 +            self.next_broadcast = now; // Broadcast ASAP
 +        }
 +    }
-+    
++
 +    fn compare_session_ids(a: &NodeId, b: &NodeId) -> std::cmp::Ordering {
 +        a.0.cmp(&b.0)
 +    }
 +}
 diff --git a/third_party/tempo_sync_core/src/lib.rs b/third_party/tempo_sync_core/src/lib.rs
 new file mode 100644
-index 0000000000000..84b94ccb2cb8f
+index 0000000..906a5f6
 --- /dev/null
 +++ b/third_party/tempo_sync_core/src/lib.rs
 @@ -0,0 +1,15 @@
 +// SPDX-License-Identifier: Apache-2.0
 +#![forbid(unsafe_code)]
 +
-+pub mod time;
-+pub mod timeline;
-+pub mod engine;
-+pub mod wire;
 +pub mod discovery;
++pub mod engine;
 +pub mod measurement;
 +pub mod session;
++pub mod time;
++pub mod timeline;
++pub mod wire;
 +
-+pub use time::{HostTime, Duration, Tempo, Beats};
-+pub use timeline::{Timeline, StartStopState, SessionState};
-+pub use engine::{Engine, Output, InterfaceId, SocketAddrPlain, IoErrorKind};
++pub use engine::{Engine, InterfaceId, IoErrorKind, Output, SocketAddrPlain};
++pub use time::{Beats, Duration, HostTime, Tempo};
++pub use timeline::{SessionState, StartStopState, Timeline};
 +pub use wire::NodeId;
 diff --git a/third_party/tempo_sync_core/src/measurement.rs b/third_party/tempo_sync_core/src/measurement.rs
 new file mode 100644
-index 0000000000000..9452ad90f0730
+index 0000000..9452ad9
 --- /dev/null
 +++ b/third_party/tempo_sync_core/src/measurement.rs
 @@ -0,0 +1,3 @@
@@ -3062,7 +3576,7 @@ index 0000000000000..9452ad90f0730
 +// Will handle delay/offset measurement
 diff --git a/third_party/tempo_sync_core/src/session.rs b/third_party/tempo_sync_core/src/session.rs
 new file mode 100644
-index 0000000000000..14554fd44f941
+index 0000000..14554fd
 --- /dev/null
 +++ b/third_party/tempo_sync_core/src/session.rs
 @@ -0,0 +1,3 @@
@@ -3071,7 +3585,7 @@ index 0000000000000..14554fd44f941
 +// Will handle session and cluster consensus
 diff --git a/third_party/tempo_sync_core/src/time.rs b/third_party/tempo_sync_core/src/time.rs
 new file mode 100644
-index 0000000000000..90e0da4ea573b
+index 0000000..90e0da4
 --- /dev/null
 +++ b/third_party/tempo_sync_core/src/time.rs
 @@ -0,0 +1,49 @@
@@ -3126,13 +3640,13 @@ index 0000000000000..90e0da4ea573b
 +}
 diff --git a/third_party/tempo_sync_core/src/timeline.rs b/third_party/tempo_sync_core/src/timeline.rs
 new file mode 100644
-index 0000000000000..4861ab6f3d5ee
+index 0000000..8a71bcb
 --- /dev/null
 +++ b/third_party/tempo_sync_core/src/timeline.rs
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,179 @@
 +// SPDX-License-Identifier: Apache-2.0
 +
-+use crate::time::{HostTime, Tempo, Beats, MicroBeats, TempoWire};
++use crate::time::{Beats, HostTime, MicroBeats, Tempo, TempoWire};
 +
 +#[derive(Debug, Clone, PartialEq)]
 +pub struct Timeline {
@@ -3181,7 +3695,9 @@ index 0000000000000..4861ab6f3d5ee
 +    pub fn phase_at_time(&self, time: HostTime, quantum: f64) -> f64 {
 +        let beat = self.beat_at_time(time, quantum);
 +        let q = quantum.abs();
-+        if q == 0.0 { return 0.0; }
++        if q == 0.0 {
++            return 0.0;
++        }
 +        let quantum_bins = (beat.abs() + q) / q;
 +        let quantum_bins_int = quantum_bins.floor();
 +        (beat + quantum_bins_int * q) % q
@@ -3239,13 +3755,13 @@ index 0000000000000..4861ab6f3d5ee
 +
 +        // beatAtTime(2000000us) = 4
 +        assert_eq!(state.beat_at_time(HostTime(2000000), 4.0), 4.0);
-+        
++
 +        // phaseAtTime(2000000us, 4.0) = 0
 +        assert_eq!(state.phase_at_time(HostTime(2000000), 4.0), 0.0);
-+        
++
 +        // timeAtBeat(4.0) = 2000000us
 +        assert_eq!(state.time_at_beat(4.0, 4.0), HostTime(2000000));
-+        
++
 +        // phase(-1.0, 4.0) = 3
 +        let beat: f64 = -1.0;
 +        let q = 4.0;
@@ -3272,7 +3788,9 @@ index 0000000000000..4861ab6f3d5ee
 +
 +impl SessionState {
 +    pub fn next_phase_match(cur: Beats, target: Beats, q: f64) -> Beats {
-+        if q == 0.0 { return target; }
++        if q == 0.0 {
++            return target;
++        }
 +        let diff = cur - target;
 +        let bins = diff / q;
 +        let ceil_bins = bins.ceil();
@@ -3299,7 +3817,7 @@ index 0000000000000..4861ab6f3d5ee
 +        state.timeline.time_origin = HostTime(0);
 +
 +        state.request_beat_at_time_quantized(HostTime(3000000), 1.0, 4.0);
-+        
++
 +        assert_eq!(state.timeline.beat_origin.to_beats(), -8.0);
 +        assert_eq!(state.timeline.time_origin.0, 0);
 +        assert_eq!(state.beat_at_time(HostTime(4500000), 4.0), 1.0);
@@ -3307,15 +3825,15 @@ index 0000000000000..4861ab6f3d5ee
 +}
 diff --git a/third_party/tempo_sync_core/src/wire.rs b/third_party/tempo_sync_core/src/wire.rs
 new file mode 100644
-index 0000000000000..91f0a4d7d8ffe
+index 0000000..5405e63
 --- /dev/null
 +++ b/third_party/tempo_sync_core/src/wire.rs
-@@ -0,0 +1,307 @@
+@@ -0,0 +1,400 @@
 +use crate::engine::SocketAddrPlain;
 +// SPDX-License-Identifier: Apache-2.0
 +
 +use crate::time::{HostTime, MicroBeats, TempoWire};
-+use crate::timeline::{Timeline, StartStopState};
++use crate::timeline::{StartStopState, Timeline};
 +
 +pub const ASDP_MAGIC: &[u8; 8] = b"_asdp_v\x01";
 +pub const LINK_MAGIC: &[u8; 8] = b"_link_v\x01";
@@ -3358,10 +3876,14 @@ index 0000000000000..91f0a4d7d8ffe
 +}
 +
 +pub fn parse_message(bytes: &[u8]) -> Option<Message> {
-+    if bytes.len() < 8 { return None; }
++    if bytes.len() < 8 {
++        return None;
++    }
 +    let magic = &bytes[0..8];
 +    if magic == ASDP_MAGIC {
-+        if bytes.len() < 20 { return None; }
++        if bytes.len() < 20 {
++            return None;
++        }
 +        let msg_type = bytes[8];
 +        let mut node_id = [0u8; 8];
 +        node_id.copy_from_slice(&bytes[12..20]);
@@ -3373,27 +3895,40 @@ index 0000000000000..91f0a4d7d8ffe
 +            let mut timeline = None;
 +            let mut start_stop = None;
 +            let mut session_id = None;
-+        let mut mep4: Option<crate::SocketAddrPlain> = None;
++            let mut mep4: Option<crate::SocketAddrPlain> = None;
 +
 +            let mut offset = 20;
 +            while offset + 8 <= bytes.len() {
-+                let key = &bytes[offset..offset+4];
-+                let size = u32::from_be_bytes(bytes[offset+4..offset+8].try_into().unwrap()) as usize;
++                let key = &bytes[offset..offset + 4];
++                let size =
++                    u32::from_be_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
 +                offset += 8;
-+                if offset + size > bytes.len() { break; }
-+                let value = &bytes[offset..offset+size];
++                if offset + size > bytes.len() {
++                    break;
++                }
++                let value = &bytes[offset..offset + size];
 +                match key {
 +                    b"tmln" if size == 24 => {
 +                        let tempo = TempoWire(i64::from_be_bytes(value[0..8].try_into().unwrap()));
-+                        let beat_origin = MicroBeats(i64::from_be_bytes(value[8..16].try_into().unwrap()));
-+                        let time_origin = HostTime(i64::from_be_bytes(value[16..24].try_into().unwrap()));
-+                        timeline = Some(Timeline { tempo, beat_origin, time_origin });
++                        let beat_origin =
++                            MicroBeats(i64::from_be_bytes(value[8..16].try_into().unwrap()));
++                        let time_origin =
++                            HostTime(i64::from_be_bytes(value[16..24].try_into().unwrap()));
++                        timeline = Some(Timeline {
++                            tempo,
++                            beat_origin,
++                            time_origin,
++                        });
 +                    }
 +                    b"stst" if size == 17 => {
 +                        let is_playing = value[0] != 0;
 +                        let beat = MicroBeats(i64::from_be_bytes(value[1..9].try_into().unwrap()));
 +                        let time = HostTime(i64::from_be_bytes(value[9..17].try_into().unwrap()));
-+                        start_stop = Some(StartStopState { is_playing, beat, time });
++                        start_stop = Some(StartStopState {
++                            is_playing,
++                            beat,
++                            time,
++                        });
 +                    }
 +                    b"sess" if size == 8 => {
 +                        let mut sess = [0u8; 8];
@@ -3401,7 +3936,8 @@ index 0000000000000..91f0a4d7d8ffe
 +                        session_id = Some(NodeId(sess));
 +                    }
 +                    b"mep4" if size == 6 => {
-+                        let mut ip = [0u8; 4]; ip.copy_from_slice(&value[0..4]);
++                        let mut ip = [0u8; 4];
++                        ip.copy_from_slice(&value[0..4]);
 +                        let port = u16::from_be_bytes(value[4..6].try_into().unwrap());
 +                        mep4 = Some(crate::SocketAddrPlain { ip, port });
 +                        // println!("PARSED MEP4: ip={:?} port={}", ip, port);
@@ -3410,10 +3946,18 @@ index 0000000000000..91f0a4d7d8ffe
 +                }
 +                offset += size;
 +            }
-+            return Some(Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id, mep4 }));
++            return Some(Message::Discovery(DiscoveryMsg::Alive {
++                node_id,
++                timeline,
++                start_stop,
++                session_id,
++                mep4,
++            }));
 +        }
 +    } else if magic == LINK_MAGIC {
-+        if bytes.len() < 9 { return None; }
++        if bytes.len() < 9 {
++            return None;
++        }
 +        let msg_type = bytes[8];
 +        let mut host_time = None;
 +        let mut prev_ghost_time = None;
@@ -3425,50 +3969,84 @@ index 0000000000000..91f0a4d7d8ffe
 +        let mut offset = 9;
 +        if msg_type == 1 {
 +            while offset + 8 <= bytes.len() {
-+                let key = &bytes[offset..offset+4];
-+                let size = u32::from_be_bytes(bytes[offset+4..offset+8].try_into().unwrap()) as usize;
++                let key = &bytes[offset..offset + 4];
++                let size =
++                    u32::from_be_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
 +                offset += 8;
-+                if offset + size > bytes.len() { break; }
-+                let value = &bytes[offset..offset+size];
++                if offset + size > bytes.len() {
++                    break;
++                }
++                let value = &bytes[offset..offset + size];
 +                match key {
-+                    b"__ht" if size == 8 => host_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
-+                    b"_pgt" if size == 8 => prev_ghost_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
++                    b"__ht" if size == 8 => {
++                        host_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap())))
++                    }
++                    b"_pgt" if size == 8 => {
++                        prev_ghost_time =
++                            Some(HostTime(i64::from_be_bytes(value.try_into().unwrap())))
++                    }
 +                    _ => {}
 +                }
 +                offset += size;
 +            }
 +            if let Some(ht) = host_time {
-+                return Some(Message::Measurement(MeasurementMsg::Ping { host_time: ht, prev_ghost_time }));
++                return Some(Message::Measurement(MeasurementMsg::Ping {
++                    host_time: ht,
++                    prev_ghost_time,
++                }));
 +            }
 +        } else if msg_type == 2 {
 +            while offset + 8 <= bytes.len() {
-+                let key = &bytes[offset..offset+4];
-+                let size = u32::from_be_bytes(bytes[offset+4..offset+8].try_into().unwrap()) as usize;
++                let key = &bytes[offset..offset + 4];
++                let size =
++                    u32::from_be_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
 +                offset += 8;
-+                if offset + size > bytes.len() { break; }
-+                let value = &bytes[offset..offset+size];
++                if offset + size > bytes.len() {
++                    break;
++                }
++                let value = &bytes[offset..offset + size];
 +                match key {
 +                    b"sess" if size == 8 => {
 +                        let mut sess = [0u8; 8];
 +                        sess.copy_from_slice(value);
 +                        session_id = Some(NodeId(sess));
 +                    }
-+                    b"__gt" if size == 8 => ghost_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
-+                    b"__ht" if size == 8 => ping_host_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
-+                    b"_pgt" if size == 8 => ping_prev_ghost_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap()))),
++                    b"__gt" if size == 8 => {
++                        ghost_time = Some(HostTime(i64::from_be_bytes(value.try_into().unwrap())))
++                    }
++                    b"__ht" if size == 8 => {
++                        ping_host_time =
++                            Some(HostTime(i64::from_be_bytes(value.try_into().unwrap())))
++                    }
++                    b"_pgt" if size == 8 => {
++                        ping_prev_ghost_time =
++                            Some(HostTime(i64::from_be_bytes(value.try_into().unwrap())))
++                    }
 +                    _ => {}
 +                }
 +                offset += size;
 +            }
 +            if let (Some(gt), Some(ht)) = (ghost_time, ping_host_time) {
-+                return Some(Message::Measurement(MeasurementMsg::Pong { session_id, ghost_time: gt, ping_host_time: ht, ping_prev_ghost_time }));
++                return Some(Message::Measurement(MeasurementMsg::Pong {
++                    session_id,
++                    ghost_time: gt,
++                    ping_host_time: ht,
++                    ping_prev_ghost_time,
++                }));
 +            }
 +        }
 +    }
 +    None
 +}
 +
-+pub fn serialize_discovery_alive(node_id: &NodeId, session_id: &NodeId, timeline: &Timeline, start_stop: &StartStopState, mep4: Option<SocketAddrPlain>, is_response: bool) -> Vec<u8> {
++pub fn serialize_discovery_alive(
++    node_id: &NodeId,
++    session_id: &NodeId,
++    timeline: &Timeline,
++    start_stop: &StartStopState,
++    mep4: Option<SocketAddrPlain>,
++    is_response: bool,
++) -> Vec<u8> {
 +    let mut out = Vec::new();
 +    out.extend_from_slice(ASDP_MAGIC);
 +    out.push(if is_response { 2 } else { 1 }); // type Alive or Response
@@ -3501,7 +4079,6 @@ index 0000000000000..91f0a4d7d8ffe
 +        out.extend_from_slice(&mep.ip);
 +        out.extend_from_slice(&mep.port.to_be_bytes());
 +        // Also advertise aep4 just in case
-+        
 +    }
 +
 +    out
@@ -3517,7 +4094,10 @@ index 0000000000000..91f0a4d7d8ffe
 +    out
 +}
 +
-+pub fn serialize_measurement_ping(host_time: HostTime, prev_ghost_time: Option<HostTime>) -> Vec<u8> {
++pub fn serialize_measurement_ping(
++    host_time: HostTime,
++    prev_ghost_time: Option<HostTime>,
++) -> Vec<u8> {
 +    let mut out = Vec::new();
 +    out.extend_from_slice(LINK_MAGIC);
 +    out.push(1); // type Ping
@@ -3535,7 +4115,11 @@ index 0000000000000..91f0a4d7d8ffe
 +    out
 +}
 +
-+pub fn serialize_measurement_pong(session_id: &NodeId, ghost_time: HostTime, ping_payload: &[u8]) -> Vec<u8> {
++pub fn serialize_measurement_pong(
++    session_id: &NodeId,
++    ghost_time: HostTime,
++    ping_payload: &[u8],
++) -> Vec<u8> {
 +    let mut out = Vec::new();
 +    out.extend_from_slice(LINK_MAGIC);
 +    out.push(2); // type Pong
@@ -3559,16 +4143,25 @@ index 0000000000000..91f0a4d7d8ffe
 +    #[test]
 +    fn test_parse_discovery_alive() {
 +        let hex = "5f617364705f7601010500000102030405060708746d6c6e00000018000000000007a120000000000000000000000000000000007365737300000008080706050403020173747374000000110100000000000f424000000000001e84806d65703400000006c0a8010551486165703400000006c0a801055149";
-+        let bytes = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect::<Vec<u8>>();
++        let bytes = (0..hex.len())
++            .step_by(2)
++            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
++            .collect::<Vec<u8>>();
 +        let msg = parse_message(&bytes).unwrap();
 +        match msg {
-+            Message::Discovery(DiscoveryMsg::Alive { node_id, timeline, start_stop, session_id, mep4: _ }) => {
++            Message::Discovery(DiscoveryMsg::Alive {
++                node_id,
++                timeline,
++                start_stop,
++                session_id,
++                mep4: _,
++            }) => {
 +                assert_eq!(node_id.0, [1, 2, 3, 4, 5, 6, 7, 8]);
 +                assert_eq!(timeline.as_ref().unwrap().tempo.0, 500000);
 +                assert_eq!(timeline.as_ref().unwrap().beat_origin.0, 0);
 +                assert_eq!(timeline.as_ref().unwrap().time_origin.0, 0);
 +                assert_eq!(session_id.unwrap().0, [8, 7, 6, 5, 4, 3, 2, 1]);
-+                assert_eq!(start_stop.as_ref().unwrap().is_playing, true);
++                assert!(start_stop.as_ref().unwrap().is_playing);
 +                assert_eq!(start_stop.as_ref().unwrap().beat.0, 1000000);
 +                assert_eq!(start_stop.as_ref().unwrap().time.0, 2000000);
 +            }
@@ -3579,7 +4172,10 @@ index 0000000000000..91f0a4d7d8ffe
 +    #[test]
 +    fn test_parse_discovery_byebye() {
 +        let hex = "5f617364705f7601030000000102030405060708";
-+        let bytes = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect::<Vec<u8>>();
++        let bytes = (0..hex.len())
++            .step_by(2)
++            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
++            .collect::<Vec<u8>>();
 +        let msg = parse_message(&bytes).unwrap();
 +        match msg {
 +            Message::Discovery(DiscoveryMsg::ByeBye { node_id }) => {
@@ -3591,11 +4187,18 @@ index 0000000000000..91f0a4d7d8ffe
 +
 +    #[test]
 +    fn test_parse_measurement_ping() {
-+        let hex = "5f6c696e6b5f7601015f5f68740000000800000000000f42405f70677400000008000000000007a120";
-+        let bytes = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect::<Vec<u8>>();
++        let hex =
++            "5f6c696e6b5f7601015f5f68740000000800000000000f42405f70677400000008000000000007a120";
++        let bytes = (0..hex.len())
++            .step_by(2)
++            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
++            .collect::<Vec<u8>>();
 +        let msg = parse_message(&bytes).unwrap();
 +        match msg {
-+            Message::Measurement(MeasurementMsg::Ping { host_time, prev_ghost_time }) => {
++            Message::Measurement(MeasurementMsg::Ping {
++                host_time,
++                prev_ghost_time,
++            }) => {
 +                assert_eq!(host_time.0, 1000000);
 +                assert_eq!(prev_ghost_time.unwrap().0, 500000);
 +            }
@@ -3606,10 +4209,18 @@ index 0000000000000..91f0a4d7d8ffe
 +    #[test]
 +    fn test_parse_measurement_pong() {
 +        let hex = "5f6c696e6b5f760102736573730000000808070605040302015f5f67740000000800000000000f42405f5f68740000000800000000000f4240";
-+        let bytes = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i+2], 16).unwrap()).collect::<Vec<u8>>();
++        let bytes = (0..hex.len())
++            .step_by(2)
++            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
++            .collect::<Vec<u8>>();
 +        let msg = parse_message(&bytes).unwrap();
 +        match msg {
-+            Message::Measurement(MeasurementMsg::Pong { session_id, ghost_time, ping_host_time, ping_prev_ghost_time: _ }) => {
++            Message::Measurement(MeasurementMsg::Pong {
++                session_id,
++                ghost_time,
++                ping_host_time,
++                ping_prev_ghost_time: _,
++            }) => {
 +                assert_eq!(session_id.unwrap().0, [8, 7, 6, 5, 4, 3, 2, 1]);
 +                assert_eq!(ghost_time.0, 1000000);
 +                assert_eq!(ping_host_time.0, 1000000);
@@ -3619,5 +4230,5 @@ index 0000000000000..91f0a4d7d8ffe
 +    }
 +}
 -- 
-2.56.0.rc1.315.gc6ed9934b7-goog
+2.54.0
 
