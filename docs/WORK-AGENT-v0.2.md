@@ -6,8 +6,8 @@ This is Jordan Bayles's personal prototype. Keep it out of Chromium's Gerrit: no
 
 ## Background
 
-- **The spec:** https://bayl.es/web-tempo-sync/. The explainer is at `explainer.html` next to it.
-- **The demo site** that uses the API: https://bayl.es/tempo-sync/.
+- **The spec:** https://baylesj.github.io/web-tempo-sync/. The explainer is at `explainer.html` next to it.
+- **The demo site** that uses the API: https://baylesj.github.io/web-tempo-sync-demo/.
 - **The patch:** `patches/0001-chromium-web-tempo-sync.patch` in this repo (`baylesj/tempo-sync`). It's one squashed commit that adds:
   - Blink: `third_party/blink/renderer/modules/tempo_sync/`, plus its mojom;
   - the browser-process host and engine: `content/browser/tempo_sync/`;
@@ -72,7 +72,7 @@ cd ~/tempo-sync && cargo build --release -p tempohut
 PORT=21$((RANDOM % 900 + 100))
 ./target/release/tempohut --port $PORT --tempo 133 &
 out/TempoSync/Chromium.app/Contents/MacOS/Chromium --user-data-dir=/tmp/tempo-sync-v02 \
-  --enable-blink-features=TempoSync --tempo-sync-port=$PORT "https://bayl.es/tempo-sync/#sampler"
+  --enable-blink-features=TempoSync --tempo-sync-port=$PORT "https://baylesj.github.io/web-tempo-sync-demo/#sampler"
 ```
 
 On the site, check each of these:

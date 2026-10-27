@@ -1,4 +1,4 @@
-// navigator.tempoSync, following the Web Tempo Sync draft (https://bayl.es/web-tempo-sync/).
+// navigator.tempoSync, following the Web Tempo Sync draft (https://baylesj.github.io/web-tempo-sync/).
 //
 // Runs in the page's own world so pages get ordinary objects. bridge.js, in the extension's
 // isolated world, carries messages to the service worker and keeps the clock offset.

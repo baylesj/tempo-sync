@@ -1,7 +1,7 @@
 # Web Tempo Sync extension
 
 A Chrome extension that gives pages `navigator.tempoSync`, as drafted in the
-[Web Tempo Sync spec](https://bayl.es/web-tempo-sync/), on stable Chrome. Pages can't open
+[Web Tempo Sync spec](https://baylesj.github.io/web-tempo-sync/), on stable Chrome. Pages can't open
 UDP sockets and neither can extensions, so a small native helper, `tempo-sync-host` (in
 `crates/`), joins Link sessions for it over Chrome's native messaging.
 
@@ -23,7 +23,7 @@ browser can. It isn't a way to ship the feature.
    directory. The `key` in `manifest.json` pins the extension ID to
    `ddfdmjnclbpgiijdcbjbginpnblceeep`, which is what the helper's manifest allows.
 3. Open a page that uses the API, such as the
-   [tempo sync demo](https://bayl.es/tempo-sync-demo/). The first `requestSession()` from a
+   [tempo sync demo](https://baylesj.github.io/web-tempo-sync-demo/). The first `requestSession()` from a
    site opens a prompt. The toolbar popup shows the session and the sites you've allowed or
    blocked.
 
